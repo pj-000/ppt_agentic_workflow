@@ -1,0 +1,6 @@
+{
+  "outline_json_truncated": "长页数大纲必须优先保证 JSON 完整闭合；压缩 topic、objective、image_prompt 的长度，不要输出半截 slides 数组。",
+  "outline_missing_layout": "每一页都必须显式填写合法且非空的 layout；若无特别理由，中间页默认使用 content。",
+  "outline_structure_invalid": "重新检查大纲骨架：第 0 页必须是 cover，第 1 页必须是 toc，最后一页必须是 closing，slide_index 必须连续递增。",
+  "generic_retry": "优先保证大纲 JSON 可解析、结构合法、字段完整；长课件场景下先保结构稳定，再追求文案润色。"
+}

@@ -1,0 +1,14 @@
+主题：{topic}
+语言：{language}
+风格原文：{style_text}
+风格参考标签：{style_ref}
+如果风格原文未指定，表示用户把 art direction 交给你决定，不要机械套用固定风格枚举。
+受众原文：{audience}
+受众参考标签：{audience_ref}
+请优先理解并保留用户输入的原始风格和受众描述，参考标签仅用于辅助，不得覆盖原意。
+受众适配提示：
+{audience_profile}
+页数范围：{min_slides}-{max_slides}
+如果页数很多，请把每页 `topic` / `objective` / `image_prompt` 写得更紧凑，优先保证完整 JSON 和非空 layout。
+
+请先规划一份页级大纲，让后续 Research Agent 能逐页研究。{extra_requirements}

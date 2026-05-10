@@ -1,0 +1,8 @@
+{
+  "name": "pptagent",
+  "version": "1.0.0",
+  "description": "PPT Agent with PptxGenJS support",
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}

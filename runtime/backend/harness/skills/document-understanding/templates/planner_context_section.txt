@@ -1,0 +1,4 @@
+## {section_index}. {section_title}
+**本节概要**: {section_summary}
+{key_points_block}{important_data_block}{tables_block}{narrative_transition_line}
+

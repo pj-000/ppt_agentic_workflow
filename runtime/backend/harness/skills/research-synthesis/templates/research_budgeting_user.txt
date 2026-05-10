@@ -1,0 +1,9 @@
+请判断下面这页 PPT 在 research 阶段应该抓取多少条网页候选资料。
+
+语言：{language}
+页面布局：{layout}
+页面主题：{topic}
+页面目标：{objective}
+已有文本线索（可能包含本页位置、前后页衔接和局部大纲脉络）：{existing_hints}
+
+只返回一个 2 到 10 之间的整数。

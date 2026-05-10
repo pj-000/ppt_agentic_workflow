@@ -1,0 +1,5 @@
+## PPT 生成建议
+- 建议页数: {suggested_total_slides}
+- 目标受众: {audience}
+- 风格偏好: {style_preference}
+{recommended_visual_elements_line}{content_focus_line}{special_requirements_line}

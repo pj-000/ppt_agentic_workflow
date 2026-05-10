@@ -1,0 +1,2 @@
+以下是各页研究内容，请为每页生成 image_prompt：
+{items_json}

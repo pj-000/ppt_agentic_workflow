@@ -1,0 +1,10 @@
+主题：{title}
+受众：{audience}
+语言：{language}
+
+{style_block}
+
+页面列表：
+{slide_topics}
+
+请选择与主题高度匹配的配色和视觉母题，避免审美惯性。

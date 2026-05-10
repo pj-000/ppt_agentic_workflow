@@ -1,0 +1,86 @@
+{
+  "content_qa": {
+    "placeholder_patterns": [
+      "xxxx",
+      "lorem",
+      "ipsum",
+      "placeholder",
+      "sample text",
+      "click to add"
+    ],
+    "min_text_length_by_layout": {
+      "content": 80,
+      "two_column": 80
+    },
+    "max_text_length_by_layout": {
+      "content": 1100,
+      "two_column": 1100
+    },
+    "toc_min_expected_topics": 2,
+    "duplicate_similarity_threshold": 0.72,
+    "issue_messages": {
+      "empty": "页面内容为空",
+      "placeholder": "发现占位符残留：{matches}",
+      "too_short": "内容页文字过少（{text_len} 字符），可能缺失要点",
+      "too_dense": "内容页信息密度过高（{text_len} 字符），建议拆分或压缩",
+      "toc_coverage": "目录页未覆盖后续主要章节，导航作用不足",
+      "missing_title": "页面标题可能缺失：{topic}",
+      "misaligned": "页面内容与本页主题/目标对齐不足，重点不够聚焦",
+      "duplicate_progression": "与上一内容页（第 {prev_idx} 页：{prev_topic}）内容高度重复，缺少叙事推进"
+    },
+    "suggestions": [
+      {
+        "match": "页面内容为空",
+        "text": "补齐标题和 3-5 条关键要点，确保本页承担明确的信息任务。"
+      },
+      {
+        "match": "占位符残留",
+        "text": "删除占位符和示例文案，替换成真实结论、数据或案例。"
+      },
+      {
+        "match": "文字过少",
+        "text": "补充定义、结论、例子或数据，让页面形成完整信息单元。"
+      },
+      {
+        "match": "信息密度过高",
+        "text": "压缩文案并拆分层级，必要时改成双栏、卡片或拆成两页。"
+      },
+      {
+        "match": "标题可能缺失",
+        "text": "保留与页级大纲一致的标题，让读者能一眼识别本页主题。"
+      },
+      {
+        "match": "目录页未覆盖",
+        "text": "目录页至少点名后续主要章节，形成清晰导航。"
+      },
+      {
+        "match": "对齐不足",
+        "text": "让标题、正文和示例都围绕本页主题展开，避免泛泛而谈。"
+      },
+      {
+        "match": "内容高度重复",
+        "text": "与上一页形成递进关系，避免重复定义或复述相同要点。"
+      }
+    ],
+    "fallback_suggestion": "强化本页的信息目标、标题层级和叙事推进，避免弱信息页。"
+  },
+  "deck_coherence": {
+    "summary_cues": [
+      "总结",
+      "结论",
+      "回顾",
+      "建议",
+      "启示",
+      "下一步",
+      "takeaway"
+    ],
+    "issue_messages": {
+      "same_lead": "与上一内容页（第 {prev_idx} 页：{prev_topic}）开头表述相同，整套叙事推进不足",
+      "weak_closing": "结尾页没有回扣前文要点，整份 deck 收束感不足"
+    },
+    "suggestions": {
+      "same_lead": "让本页从新角度推进叙事，例如案例、机制、对比或结论，而不是重复开场。",
+      "weak_closing": "结尾页补一条总论或行动建议，回扣前文核心章节，不要只停在致谢。"
+    }
+  }
+}

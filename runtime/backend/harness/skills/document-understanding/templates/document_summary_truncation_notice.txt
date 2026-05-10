@@ -1,0 +1,1 @@
+[注意：原始文本已截断至前 {max_input_chars} 字符，内容可能不完整，请基于已有内容生成摘要，并在 `special_requirements` 中注明。]

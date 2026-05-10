@@ -1,0 +1,28 @@
+{
+  "rect": "rect",
+  "rectangle": "rect",
+  "square": "rect",
+  "oval": "ellipse",
+  "ellipse": "ellipse",
+  "circle": "ellipse",
+  "line": "line",
+  "roundrect": "roundRect",
+  "roundedrect": "roundRect",
+  "roundedrectangle": "roundRect",
+  "rounded_rectangle": "roundRect",
+  "chevron": "chevron",
+  "diamond": "diamond",
+  "triangle": "triangle",
+  "hexagon": "hexagon",
+  "arc": "arc",
+  "pie": "pie",
+  "cloud": "cloud",
+  "pentagon": "pentagon",
+  "rightarrow": "rightArrow",
+  "right_arrow": "rightArrow",
+  "arrow": "rightArrow",
+  "star5": "star5",
+  "star5point": "star5",
+  "star_5_point": "star5"
+}
+

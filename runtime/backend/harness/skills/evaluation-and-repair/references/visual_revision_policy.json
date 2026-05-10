@@ -1,0 +1,53 @@
+{
+  "strict_dimension_threshold": 3.6,
+  "soft_issue_revision_threshold": 3.2,
+  "force_issue_revision_threshold": 3.2,
+  "max_revision_candidates_per_round": 3,
+  "max_total_revision_pages": 4,
+  "severe_issue_groups": [
+    {
+      "name": "layout_breakage",
+      "patterns": ["越界", "裁切", "重叠", "被截断", "溢出"],
+      "force_revision": true,
+      "score_caps": {
+        "layout_score": 2.8
+      }
+    },
+    {
+      "name": "visual_asset_failure",
+      "patterns": ["乱码", "伪英文", "假图", "假信息图", "无关图片", "图文不符"],
+      "force_revision": true,
+      "score_caps": {
+        "content_score": 2.8,
+        "design_score": 2.8
+      }
+    },
+    {
+      "name": "visual_balance_failure",
+      "patterns": ["空白", "空框", "大面积留白", "大片留白", "版面利用率低", "主视觉过大", "图文比例失衡", "信息区过空", "卡片过大但信息过少"],
+      "force_revision": false,
+      "score_caps": {
+        "content_score": 2.8,
+        "design_score": 2.8
+      }
+    },
+    {
+      "name": "readability_failure",
+      "patterns": ["低对比", "不可读", "看不清", "白字", "浅灰字"],
+      "force_revision": true,
+      "score_caps": {
+        "content_score": 3.0,
+        "design_score": 2.8
+      }
+    },
+    {
+      "name": "structure_failure",
+      "patterns": ["层级乱", "阅读路径", "重心散", "结构混乱", "节点未对齐", "流程图松散", "未对齐", "一侧过空", "图文失衡", "视觉重心偏移"],
+      "force_revision": false,
+      "score_caps": {
+        "layout_score": 3.0
+      }
+    }
+  ],
+  "fallback_suggestion_for_severe_issue": "优先修复主视觉失效、越界、图文比例失衡或结构未对齐问题，再调整风格细节。"
+}

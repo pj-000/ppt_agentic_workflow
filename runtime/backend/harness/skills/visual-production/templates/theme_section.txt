@@ -1,0 +1,6 @@
+- 主色：#{primary_color}
+- 辅色：#{secondary_color}
+- 点缀色：#{accent_color}
+- 标题字体：{header_font}
+- 正文字体：{body_font}
+- 视觉母题：{motif_description}

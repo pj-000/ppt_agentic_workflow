@@ -1,0 +1,9 @@
+以下是从文档中提取的原始内容，请按 SKILL.md 规范输出结构化摘要 JSON。
+
+{source_file_line}
+{page_count_line}
+
+## 原始文本内容
+{raw_text}
+
+{tables_section}

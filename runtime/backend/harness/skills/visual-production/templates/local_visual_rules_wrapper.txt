@@ -1,0 +1,20 @@
+# Local PPTX Generation Rules
+
+这是在 Anthropic 官方 PPTX skill 基础上的本地增强规则。
+生成 PptxGenJS 代码时，必须同时遵守官方 skill 与本规则。
+
+---
+
+{theme_rules}
+
+---
+
+{layout_rules}
+
+---
+
+{slide_rules}
+
+---
+
+{repair_patterns}

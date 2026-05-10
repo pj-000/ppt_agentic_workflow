@@ -1,0 +1,1 @@
+请只返回一个单行 JSON 对象；所有字符串字段都必须合法转义；`motif_description` 不要出现换行；`pres_init_code` 示例：pres.layout = \"LAYOUT_WIDE\";

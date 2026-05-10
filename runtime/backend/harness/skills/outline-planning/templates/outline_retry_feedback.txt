@@ -1,0 +1,11 @@
+## 上一轮大纲失败修复要求
+- 上次失败摘录：{error_excerpt}
+- 本次目标页数：{requested_slides}
+- 长课件紧凑模式：{compact_mode}
+
+请重新输出一个完整、可解析的单个 JSON 对象，并严格遵守下面的修复要求：
+1. 绝对不要输出半截 JSON，必须一次性完整闭合所有 `{}` 和 `[]`
+2. 每一页都必须显式填写非空 `layout`，且只能使用 `cover`、`toc`、`content`、`two_column`、`closing`
+3. 如果页数较多，请优先压缩 `topic`、`objective`、`image_prompt` 的长度，保证 JSON 完整性优先于文案华丽
+4. 不要在 JSON 外添加任何解释、备注或 markdown
+5. 保持 `slide_index` 从 0 连续递增，并确保第 0 页是 `cover`、第 1 页是 `toc`、最后一页是 `closing`

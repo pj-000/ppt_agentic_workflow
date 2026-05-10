@@ -1,0 +1,1 @@
+修正所有 `addShape()` 的第一个参数：请使用合法形状值，例如 `\"rect\"`、`\"ellipse\"`、`\"line\"`、`\"roundRect\"`，或等价的 `pres.shapes.RECTANGLE/OVAL/LINE/ROUNDED_RECTANGLE`。

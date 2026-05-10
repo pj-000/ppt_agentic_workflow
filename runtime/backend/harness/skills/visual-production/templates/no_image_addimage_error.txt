@@ -1,0 +1,1 @@
+无图片模式下禁止使用 addImage；请改用 addChart/addShape/addText 做正常插图。

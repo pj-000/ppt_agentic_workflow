@@ -1,0 +1,5 @@
+语言：{language}
+总页数：{slide_count}
+
+下面是每页信息：
+{slide_lines}

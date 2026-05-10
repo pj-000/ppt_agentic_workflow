@@ -1,0 +1,23 @@
+{
+  "slide_width": 13.333,
+  "slide_height": 7.5,
+  "overflow_tolerance": 0.02,
+  "coordinate_keys": {
+    "x": "x",
+    "y": "y",
+    "w": "w",
+    "h": "h"
+  },
+  "call_specs": [
+    { "call_name": "addText", "object_selector": "last" },
+    { "call_name": "addShape", "object_selector": "last" },
+    { "call_name": "addImage", "object_selector": "first" },
+    { "call_name": "addChart", "object_selector": "last" },
+    { "call_name": "addTable", "object_selector": "last" }
+  ],
+  "messages": {
+    "negative_origin": "检测到 {call_name} 的起始坐标越过页面左上边界：x={x}, y={y}, w={w}, h={h}。请把元素放回页面内并保留合理边距。",
+    "non_positive_size": "检测到 {call_name} 使用了非正尺寸：x={x}, y={y}, w={w}, h={h}。请确保宽高为正数，避免零宽/零高元素。",
+    "overflow": "检测到 {call_name} 超出页面边界：x={x}, y={y}, w={w}, h={h}，页面尺寸为 {slide_width}x{slide_height}。请缩小元素或调整位置，避免越界和裁切。"
+  }
+}

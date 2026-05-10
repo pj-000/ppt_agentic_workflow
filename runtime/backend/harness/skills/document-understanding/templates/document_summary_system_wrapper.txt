@@ -1,0 +1,9 @@
+{skill_body}
+
+## Output Guardrails
+- 只输出可解析的 JSON。
+- 保持章节顺序与原文一致。
+- 不要虚构源文中不存在的具体数据。
+
+## Repair Patterns
+{repair_patterns}

@@ -1,0 +1,13 @@
+## 布局骨架（必须遵守）
+- archetype：{archetype}
+- 页面语义：{page_intent}
+- 证据表达：{evidence_mode}
+- 标题区：x={title_x}, y={title_y}, w={title_w}, h={title_h}
+{body_line}
+{visual_line}
+{emphasis_line}
+- 文本密度：{text_density}
+- 必须继承的锚点：{required_anchors}
+- 禁止触碰区域：{forbidden_regions}
+- 设计理由：{rationale}
+- 安全降级备选：{fallback_archetypes}

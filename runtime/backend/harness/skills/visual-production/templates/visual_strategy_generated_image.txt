@@ -1,0 +1,2 @@
+## 主视觉执行策略
+本页主视觉已决策为 `generated_image`。如果有可用图片资产，优先把该图片作为主视觉；如果图片暂时不可用，再退回 addChart / addShape / addText 做结构化示意。

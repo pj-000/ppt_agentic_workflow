@@ -1,0 +1,6 @@
+- 页码：第 {slide_index} 页
+- 布局类型：{layout}
+- 页面主题：{topic}
+- 页面目标：{objective}
+- 主视觉方式：{visual_mode}
+{image_prompt_line}

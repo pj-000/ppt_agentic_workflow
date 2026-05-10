@@ -1,0 +1,3 @@
+## 图片资产
+本页只有一个可用本地图片资产：{image_path}
+如果你决定使用图片，必须且只能使用这个本地路径的 addImage({ path: "..." })，禁止使用任何远程 URL、data URI、preencoded 占位图或临时 SVG。

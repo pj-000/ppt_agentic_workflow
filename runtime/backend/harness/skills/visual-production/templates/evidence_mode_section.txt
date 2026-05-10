@@ -1,0 +1,3 @@
+## 证据表达方式（必须遵守）
+- evidence_mode：{evidence_mode}
+- 表达规则：{evidence_rule}

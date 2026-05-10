@@ -1,0 +1,72 @@
+{
+  "outline-planning": {
+    "outline_generation": {
+      "catalog_triggers": ["outline_generation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（大纲规划）"
+    }
+  },
+  "research-synthesis": {
+    "research_synthesis": {
+      "catalog_triggers": ["research_synthesis", "research_search"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（研究综合）"
+    }
+  },
+  "visual-production": {
+    "slide_generation": {
+      "catalog_triggers": ["slide_generation", "assembly", "content_qa", "visual_qa"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（视觉生产）"
+    },
+    "assembly": {
+      "catalog_triggers": ["assembly", "slide_generation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（组装修复）"
+    },
+    "content_qa": {
+      "catalog_triggers": ["content_qa", "slide_generation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（文本修复）"
+    },
+    "visual_qa": {
+      "catalog_triggers": ["visual_qa", "slide_generation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（视觉修复）"
+    },
+    "image_prompt_enrichment": {
+      "catalog_triggers": ["image_prompt_enrichment"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（图像提示词增强）"
+    },
+    "asset_generation": {
+      "catalog_triggers": ["asset_generation", "asset_search"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（图片资产）"
+    },
+    "asset_search": {
+      "catalog_triggers": ["asset_search", "asset_generation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（图片检索）"
+    }
+  },
+  "evaluation-and-repair": {
+    "content_evaluation": {
+      "catalog_triggers": ["content_evaluation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（内容评估）"
+    },
+    "visual_evaluation": {
+      "catalog_triggers": ["visual_evaluation"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（视觉评估）"
+    }
+  },
+  "document-understanding": {
+    "document_summary": {
+      "catalog_triggers": ["document_summary"],
+      "max_items": 2,
+      "heading": "## 长期技能目录（文档理解）"
+    }
+  }
+}

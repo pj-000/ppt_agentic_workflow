@@ -1,0 +1,2 @@
+## 主视觉执行策略
+本页主视觉已决策为 `js_diagram`。请优先使用 addChart / addShape / addText 构建结构化示意图，不要把主视觉交给生成图片。

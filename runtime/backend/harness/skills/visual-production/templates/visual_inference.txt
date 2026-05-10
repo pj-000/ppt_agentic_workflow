@@ -1,0 +1,2 @@
+## 主视觉推断
+大纲原始 visual_mode=auto；系统根据本页主题与目标推断，更适合 `{effective_visual_mode}`。
