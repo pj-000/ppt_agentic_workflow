@@ -48,7 +48,7 @@ Given an existing PPT, a user revision request, the current interaction context,
 
 ## Required Directory Structure
 
-Create or maintain this structure:
+The following is the final target directory structure across all phases. Do not create all files at once. For each phase, create only the files required by that phase.
 
 ```text
 slide_revise_agent/
@@ -98,7 +98,7 @@ slide_revise_agent/
     python_pptx_executor.py
     pptxgenjs_executor.py
     backend_adapter.py
-    internal_backend_adapter.py
+    optional_backend_adapter.py
 
   verification/
     __init__.py
@@ -145,6 +145,8 @@ experiments/slide_revise/outputs/
 experiments/slide_revise/logs/
 experiments/slide_revise/reports/
 ```
+
+These experiment directories are part of the later reproducibility and evaluation workflow. Do not create them during Phase 0 unless that phase explicitly asks for them.
 
 ---
 
@@ -271,12 +273,25 @@ Keep the implementation aligned with this research direction.
 Start with Phase 0 only:
 
 ```text
-1. Create the directory structure.
-2. Implement Pydantic schemas.
-3. Add a CLI skeleton.
-4. Add default config.
-5. Add minimal smoke tests.
-6. Do not implement parser/localizer/planner yet.
+1. Create only the minimal schema package files listed below.
+2. Implement Pydantic schemas needed for serialization and deserialization.
+3. Add a minimal schema serialization test.
+4. Do not create parser, executor, benchmark, evaluation, UI, CLI, prompt, config, or experiment files yet.
+```
+
+Phase 0 should only create:
+
+```text
+slide_revise_agent/__init__.py
+slide_revise_agent/index/__init__.py
+slide_revise_agent/index/schema.py
+slide_revise_agent/interaction/__init__.py
+slide_revise_agent/interaction/schema.py
+slide_revise_agent/localization/__init__.py
+slide_revise_agent/localization/schema.py
+slide_revise_agent/planning/__init__.py
+slide_revise_agent/planning/operation_schema.py
+tests/slide_revise_agent/test_schema_serialization.py
 ```
 
 After Phase 0, stop and report:
@@ -284,7 +299,6 @@ After Phase 0, stop and report:
 ```text
 - files created;
 - schema overview;
-- CLI commands available;
 - tests run;
 - any assumptions.
 ```
