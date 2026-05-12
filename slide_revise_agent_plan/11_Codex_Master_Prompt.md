@@ -26,11 +26,16 @@ Your task is to add a new independent research module called:
 slide_revise_agent/
 ```
 
-Do not break or rewrite the existing `ppt_backend/` and `runtime/` logic unless explicitly asked. The existing PPT backend should be treated as an optional backend adapter. The research contribution is not one-shot PPT generation. The new module is for:
+Do not break or rewrite the existing `ppt_backend/` and `runtime/` logic unless
+explicitly asked. The existing PPT backend should be treated as an optional
+backend adapter. The research contribution is not one-shot PPT generation. The
+new module is for:
 
 > SlideReviseAgent: Index-Guided Interactive Local Revision for Presentation Slides.
 
-The goal is to support interactive local PPT revision. Given an existing PPT, a user revision request, an interaction context such as selected slide/element and history, the system should:
+The goal is to support interactive local PPT revision. Given an existing PPT, a
+user revision request, an interaction context such as selected slide/element and
+history, the system should:
 
 ```text
 1. build a Multi-granularity Revision Index;
@@ -42,13 +47,19 @@ The goal is to support interactive local PPT revision. Given an existing PPT, a 
 7. support benchmark evaluation.
 ```
 
-Given an existing PPT, a user revision request, the current interaction context, and the interaction history, the system should localize affected slides and elements, generate an edit operation plan, and perform minimal local revisions while preserving unaffected slides, the original visual style, and deck-level coherence.
+Given an existing PPT, a user revision request, the current interaction context,
+and the interaction history, the system should localize affected slides and
+elements, generate an edit operation plan, and perform minimal local revisions
+while preserving unaffected slides, the original visual style, and deck-level
+coherence.
 
 ---
 
 ## Required Directory Structure
 
-The following is the final target directory structure across all phases. Do not create all files at once. For each phase, create only the files required by that phase.
+The following is the final target directory structure across all phases. Do not
+create all files at once. For each phase, create only the files required by that
+phase.
 
 ```text
 slide_revise_agent/
@@ -146,7 +157,9 @@ experiments/slide_revise/logs/
 experiments/slide_revise/reports/
 ```
 
-These experiment directories are part of the later reproducibility and evaluation workflow. Do not create them during Phase 0 unless that phase explicitly asks for them.
+These experiment directories are part of the later reproducibility and
+evaluation workflow. Do not create them during Phase 0 unless that phase
+explicitly asks for them.
 
 ---
 
@@ -210,12 +223,35 @@ The schema should support:
 Implement CLI subcommands:
 
 ```bash
-python -m slide_revise_agent.cli build-index --ppt input.pptx --out deck_index.json
-python -m slide_revise_agent.cli parse-intent --instruction "这页太满了" --selected-slide 5
-python -m slide_revise_agent.cli localize --index deck_index.json --instruction "这里加个例子" --selected-slide 6
-python -m slide_revise_agent.cli plan --index deck_index.json --instruction "这页太满了" --selected-slide 5 --out edit_plan.json
-python -m slide_revise_agent.cli execute --ppt input.pptx --plan edit_plan.json --out revised.pptx
-python -m slide_revise_agent.cli revise --ppt input.pptx --instruction "这页太满了，拆成两页" --selected-slide 5 --out revised.pptx
+python -m slide_revise_agent.cli build-index \
+  --ppt input.pptx \
+  --out deck_index.json
+
+python -m slide_revise_agent.cli parse-intent \
+  --instruction "这页太满了" \
+  --selected-slide 5
+
+python -m slide_revise_agent.cli localize \
+  --index deck_index.json \
+  --instruction "这里加个例子" \
+  --selected-slide 6
+
+python -m slide_revise_agent.cli plan \
+  --index deck_index.json \
+  --instruction "这页太满了" \
+  --selected-slide 5 \
+  --out edit_plan.json
+
+python -m slide_revise_agent.cli execute \
+  --ppt input.pptx \
+  --plan edit_plan.json \
+  --out revised.pptx
+
+python -m slide_revise_agent.cli revise \
+  --ppt input.pptx \
+  --instruction "这页太满了，拆成两页" \
+  --selected-slide 5 \
+  --out revised.pptx
 ```
 
 ---

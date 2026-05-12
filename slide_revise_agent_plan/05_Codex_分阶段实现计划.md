@@ -356,7 +356,7 @@ Implement an edit planner that maps InteractionIntent + LocalizationResult + Dec
 slide_revise_agent/execution/base_executor.py
 slide_revise_agent/execution/python_pptx_executor.py
 slide_revise_agent/execution/backend_adapter.py
-slide_revise_agent/execution/internal_backend_adapter.py  # 可选
+slide_revise_agent/execution/optional_backend_adapter.py  # 可选
 ```
 
 ## 支持操作
