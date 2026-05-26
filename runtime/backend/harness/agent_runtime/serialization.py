@@ -5,6 +5,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from backend.harness.agent_runtime.errors import sanitize_agent_error_message
+
 
 def to_jsonable(value: Any) -> Any:
     if value is None or isinstance(value, str | int | float | bool):
@@ -26,5 +28,5 @@ def to_jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple | set):
         return [to_jsonable(item) for item in value]
     if isinstance(value, BaseException):
-        return f"{type(value).__name__}: {value}"
+        return f"{type(value).__name__}: {sanitize_agent_error_message(str(value))}"
     return str(value)

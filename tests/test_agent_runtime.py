@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -137,6 +138,14 @@ def test_to_jsonable_supports_common_structures(tmp_path: Path) -> None:
     assert sorted(result["nested"][0]["values"]) == [1, 2]
 
 
+def test_to_jsonable_sanitizes_exception() -> None:
+    result = to_jsonable(ValueError("bad api_key=sk-secret123456789 from /private/tmp/file.py"))
+
+    assert "ValueError:" in result
+    assert "sk-secret123456789" not in result
+    assert "/private/tmp" not in result
+
+
 def test_agent_registry_registers_lists_and_rejects_errors() -> None:
     registry = AgentRegistry()
     runtime = FakeRuntime()
@@ -150,6 +159,14 @@ def test_agent_registry_registers_lists_and_rejects_errors() -> None:
         registry.register(runtime)
     with pytest.raises(AgentNotFoundError):
         registry.get("missing")
+
+
+def test_agent_registry_error_message_accepts_sync_or_async_run() -> None:
+    class BadRuntime:
+        spec = AgentSpec(name="bad", role=AgentRole.UNKNOWN)
+
+    with pytest.raises(AgentRuntimeError, match="callable run"):
+        AgentRegistry().register(BadRuntime())
 
 
 def test_agent_executor_executes_fake_success_runtime() -> None:
@@ -167,6 +184,114 @@ def test_agent_executor_executes_fake_success_runtime() -> None:
     assert result.status == "success"
     assert result.payload["ok"] is True
     assert result.metrics["latency_ms"] >= 0
+
+
+def test_agent_executor_normalizes_result_identity_fields() -> None:
+    class WrongIdentityRuntime(FakeRuntime):
+        async def run(self, request: AgentRequest, context: AgentContext) -> AgentResult:
+            return AgentResult(
+                run_id="wrong",
+                task_id="wrong",
+                agent_name="wrong",
+                capability=AgentCapability.RESEARCH_TOPIC,
+                status="success",
+            )
+
+    registry = AgentRegistry()
+    registry.register(WrongIdentityRuntime())
+    request = _request(AgentCapability.UNKNOWN)
+
+    result = asyncio.run(AgentExecutor(registry).execute(agent_name="fake", request=request, context=_context()))
+
+    assert result.run_id == request.run_id
+    assert result.task_id == request.task_id
+    assert result.agent_name == "fake"
+    assert result.capability == request.capability
+
+
+def test_agent_executor_sanitizes_returned_agent_result_errors() -> None:
+    class SensitiveErrorRuntime(FakeRuntime):
+        async def run(self, request: AgentRequest, context: AgentContext) -> AgentResult:
+            return AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                agent_name=self.spec.name,
+                capability=request.capability,
+                status="failed",
+                errors=[
+                    AgentError(
+                        error_type="ValueError",
+                        message="bad api_key=sk-secret123456789 system_prompt=private from /private/tmp/file.py",
+                        error_signature="planner:bad:sk-secret123456789:/private/tmp/file.py",
+                        raw_excerpt="hidden_reasoning=secret chain_of_thought=private sk-secret123456789",
+                    )
+                ],
+            )
+
+    registry = AgentRegistry()
+    registry.register(SensitiveErrorRuntime())
+
+    result = asyncio.run(
+        AgentExecutor(registry).execute(
+            agent_name="fake",
+            request=_request(AgentCapability.UNKNOWN),
+            context=_context(),
+        )
+    )
+    error = result.errors[0]
+
+    assert "sk-secret123456789" not in error.message
+    assert "system_prompt=private" not in error.message
+    assert "/private/tmp" not in error.message
+    assert error.raw_excerpt is not None
+    assert "sk-secret123456789" not in error.raw_excerpt
+    assert "hidden_reasoning" not in error.raw_excerpt
+    assert "chain_of_thought" not in error.raw_excerpt
+    assert error.error_signature is not None
+    assert "sk-secret123456789" not in error.error_signature
+    assert "/private/tmp" not in error.error_signature
+
+
+def test_agent_executor_normalizes_memory_writes_and_artifacts(tmp_path: Path) -> None:
+    class CustomMetric:
+        def __str__(self) -> str:
+            return "custom-metric"
+
+    class MessyRuntime(FakeRuntime):
+        async def run(self, request: AgentRequest, context: AgentContext) -> AgentResult:
+            return AgentResult.model_construct(
+                run_id="wrong",
+                task_id="wrong",
+                agent_name="wrong",
+                capability=AgentCapability.RESEARCH_TOPIC,
+                status="success",
+                payload={"bytes": b"abc", "error": ValueError("api_key=sk-secret123456789")},
+                output_artifacts={Path("outline"): tmp_path / "outline.json"},
+                metrics={"custom": CustomMetric(), "latency_ms": 999999},
+                errors=[],
+                memory_writes=[123, tmp_path / "memory.json"],
+            )
+
+    registry = AgentRegistry()
+    registry.register(MessyRuntime())
+
+    result = asyncio.run(
+        AgentExecutor(registry).execute(
+            agent_name="fake",
+            request=_request(AgentCapability.UNKNOWN),
+            context=_context(),
+        )
+    )
+
+    assert result.payload["bytes"] == "<bytes:3>"
+    assert "sk-secret123456789" not in result.payload["error"]
+    assert all(isinstance(key, str) for key in result.output_artifacts)
+    assert all(isinstance(value, str) for value in result.output_artifacts.values())
+    assert all(isinstance(item, str) for item in result.memory_writes)
+    assert result.memory_writes[0] == "123"
+    assert result.metrics["custom"] == "custom-metric"
+    assert "latency_ms" in result.metrics
+    assert result.metrics["latency_ms"] != 999999
 
 
 def test_agent_executor_converts_runtime_exception_to_failed_result() -> None:
@@ -189,6 +314,46 @@ def test_agent_executor_converts_runtime_exception_to_failed_result() -> None:
     assert result.errors[0].error_type == "ValueError"
     assert "sk-secret123456789" not in result.errors[0].message
     assert "/private/tmp" not in result.errors[0].error_signature
+
+
+def test_agent_executor_trace_does_not_include_raw_error_message(tmp_path: Path) -> None:
+    class SensitiveErrorRuntime(FakeRuntime):
+        async def run(self, request: AgentRequest, context: AgentContext) -> AgentResult:
+            return AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                agent_name=self.spec.name,
+                capability=request.capability,
+                status="failed",
+                errors=[
+                    AgentError(
+                        error_type="ValueError",
+                        message="bad sk-secret123456789 system_prompt=private hidden_reasoning=secret",
+                        raw_excerpt="hidden_reasoning=secret sk-secret123456789",
+                    )
+                ],
+            )
+
+    registry = AgentRegistry()
+    registry.register(SensitiveErrorRuntime())
+    store = TraceStore(tmp_path)
+    trace = ObservabilityTraceAdapter("run_agent", store)
+
+    result = asyncio.run(
+        AgentExecutor(registry, trace=trace).execute(
+            agent_name="fake",
+            request=_request(AgentCapability.UNKNOWN),
+            context=_context(),
+        )
+    )
+    finished = [event for event in store.load("run_agent") if event.event_type == "agent.finished"][0]
+    payload_json = json.dumps(finished.payload, ensure_ascii=False)
+
+    assert result.status == "failed"
+    assert "sk-secret123456789" not in payload_json
+    assert "system_prompt" not in payload_json
+    assert "hidden_reasoning" not in payload_json
+    assert finished.error_signature is not None
 
 
 def test_agent_executor_returns_structured_skipped_for_unsupported_capability() -> None:

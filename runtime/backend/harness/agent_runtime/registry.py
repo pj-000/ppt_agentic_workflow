@@ -23,7 +23,7 @@ class AgentRegistry:
         if not isinstance(spec, AgentSpec):
             raise AgentRuntimeError("Agent runtime must expose an AgentSpec as .spec")
         if not callable(run):
-            raise AgentRuntimeError("Agent runtime must expose async run(request, context)")
+            raise AgentRuntimeError("Agent runtime must expose callable run(request, context)")
         if self.has(spec.name):
             raise AgentRuntimeError(f"Agent already registered: {spec.name}")
         self._agents[spec.name] = RegisteredAgent(spec=spec, runtime=agent_runtime)

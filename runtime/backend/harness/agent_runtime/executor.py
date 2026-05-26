@@ -11,7 +11,7 @@ from backend.harness.agent_runtime.errors import (
     sanitize_agent_error_message,
 )
 from backend.harness.agent_runtime.registry import AgentRegistry
-from backend.harness.agent_runtime.schema import AgentContext, AgentError, AgentRequest, AgentResult
+from backend.harness.agent_runtime.schema import AgentContext, AgentError, AgentRequest, AgentResult, AgentSpec
 from backend.harness.agent_runtime.serialization import to_jsonable
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,12 @@ class AgentExecutor:
                 latency_ms=_latency_ms(started),
                 retryable=False,
             )
+            result = _normalize_agent_result(
+                result,
+                spec=spec,
+                request=request,
+                latency_ms=_latency_ms(started),
+            )
             self._record_finished(result)
             return result
 
@@ -66,10 +72,12 @@ class AgentExecutor:
                     status="success",
                     payload={"value": to_jsonable(result)},
                 )
-            result.metrics["latency_ms"] = _latency_ms(started)
-            result.payload = to_jsonable(result.payload)
-            result.output_artifacts = {str(key): str(value) for key, value in result.output_artifacts.items()}
-            result.metrics = to_jsonable(result.metrics)
+            result = _normalize_agent_result(
+                result,
+                spec=spec,
+                request=request,
+                latency_ms=_latency_ms(started),
+            )
         except Exception as exc:
             result = _error_result(
                 agent_name=spec.name,
@@ -78,6 +86,12 @@ class AgentExecutor:
                 status="failed",
                 latency_ms=_latency_ms(started),
                 retryable=_is_retryable(exc),
+            )
+            result = _normalize_agent_result(
+                result,
+                spec=spec,
+                request=request,
+                latency_ms=_latency_ms(started),
             )
 
         self._record_finished(result)
@@ -144,6 +158,68 @@ def _error_result(
             )
         ],
     )
+
+
+def _normalize_agent_result(
+    result: AgentResult,
+    *,
+    spec: AgentSpec,
+    request: AgentRequest,
+    latency_ms: int,
+) -> AgentResult:
+    metrics = to_jsonable(result.metrics)
+    if not isinstance(metrics, dict):
+        metrics = {}
+    metrics["latency_ms"] = latency_ms
+    return result.model_copy(
+        update={
+            "run_id": request.run_id,
+            "task_id": request.task_id,
+            "agent_name": spec.name,
+            "capability": request.capability,
+            "payload": to_jsonable(result.payload),
+            "output_artifacts": {str(key): str(value) for key, value in result.output_artifacts.items()},
+            "metrics": metrics,
+            "errors": _sanitize_result_errors(
+                result,
+                agent_name=spec.name,
+                capability=request.capability.value,
+            ),
+            "memory_writes": [str(to_jsonable(item)) for item in result.memory_writes],
+        }
+    )
+
+
+def _sanitize_result_errors(
+    result: AgentResult,
+    *,
+    agent_name: str,
+    capability: str,
+) -> list[AgentError]:
+    sanitized: list[AgentError] = []
+    for error in result.errors:
+        error_type = sanitize_agent_error_message(error.error_type or "Error", limit=80)
+        message = sanitize_agent_error_message(error.message)
+        raw_excerpt = (
+            sanitize_agent_error_message(error.raw_excerpt, limit=200)
+            if error.raw_excerpt is not None
+            else None
+        )
+        sanitized.append(
+            AgentError(
+                error_type=error_type,
+                message=message,
+                error_signature=build_agent_error_signature(
+                    agent_name=agent_name,
+                    capability=capability,
+                    error_type=error_type,
+                    message=message,
+                ),
+                retryable=bool(error.retryable),
+                raw_excerpt=raw_excerpt,
+            )
+        )
+    return sanitized
 
 
 def _latency_ms(started: float) -> int:
