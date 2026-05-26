@@ -81,17 +81,19 @@ def _check_js_syntax(call: ToolCall) -> dict[str, Any]:
     }
 
 
-def _run_pptxgenjs(call: ToolCall) -> dict[str, Any]:
+def _run_pptxgenjs(call: ToolCall) -> ToolResult | dict[str, Any]:
     from backend.tools import pptx_skill
 
     output_path = str(call.input.get("output_path") or "")
     timeout_s = int(call.input.get("timeout_s") or 60)
     pptx_path = pptx_skill.run_js(str(call.input.get("code") or ""), output_path, timeout=timeout_s)
     path = Path(pptx_path)
+    if not path.exists():
+        return _failed(call, "PptxArtifactMissing", "PptxGenJS completed but did not create the PPTX file")
     return {
         "pptx_path": str(path),
-        "exists": path.exists(),
-        "file_size": path.stat().st_size if path.exists() else 0,
+        "exists": True,
+        "file_size": path.stat().st_size,
     }
 
 

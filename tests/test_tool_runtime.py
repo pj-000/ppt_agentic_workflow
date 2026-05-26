@@ -214,6 +214,31 @@ def test_builtin_ppt_tools_are_wrappers_and_can_be_monkeypatched(monkeypatch, tm
     assert preview.output["preview_count"] == 1
 
 
+def test_ppt_run_pptxgenjs_fails_when_artifact_is_missing(monkeypatch, tmp_path: Path) -> None:
+    from backend.tools import pptx_skill
+
+    output_path = tmp_path / "missing.pptx"
+    monkeypatch.setattr(pptx_skill, "run_js", lambda code, output_path, timeout=60: output_path)
+
+    registry = create_default_tool_registry()
+    executor = ToolExecutor(registry)
+
+    result = asyncio.run(
+        executor.execute(
+            _call(
+                "ppt.run_pptxgenjs",
+                {"code": "pptx.writeFile()", "output_path": str(output_path), "timeout_s": 5},
+            )
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.error_type == "PptxArtifactMissing"
+    assert result.error.error_signature.startswith("ppt.run_pptxgenjs:PptxArtifactMissing:")
+    assert output_path.exists() is False
+
+
 def test_builtin_search_document_and_eval_tools_do_not_call_external_services(monkeypatch, tmp_path: Path) -> None:
     from backend.harness.agents import document_summary
     from backend.tools import search_backend
