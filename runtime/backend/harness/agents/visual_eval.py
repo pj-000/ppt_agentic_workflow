@@ -8,14 +8,14 @@ agents/evaluator.py
 import base64
 import json
 import logging
+import os
 import re
 import uuid
 from functools import cached_property
 from pathlib import Path
 
-from openai import OpenAI
-
 import config
+from backend.tools.usage_recorder import estimate_tokens_from_text, record_usage
 from backend.harness.runtime import (
     HarnessTrace,
     PromptComposer,
@@ -25,6 +25,7 @@ from backend.harness.runtime import (
     merge_prompt_sections,
 )
 from backend.models.schemas import OutlinePlan, SlideEvalResult
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
@@ -82,7 +83,10 @@ class EvaluatorAgent:
 
     @property
     def max_revision_candidates_per_round(self) -> int:
-        value = self._revision_policy.get("max_revision_candidates_per_round", 3)
+        value = os.getenv("EVAL_MAX_REVISION_CANDIDATES_PER_ROUND") or self._revision_policy.get(
+            "max_revision_candidates_per_round",
+            3,
+        )
         try:
             return max(1, int(value))
         except (TypeError, ValueError):
@@ -90,7 +94,7 @@ class EvaluatorAgent:
 
     @property
     def max_total_revision_pages(self) -> int:
-        value = self._revision_policy.get("max_total_revision_pages", 4)
+        value = os.getenv("EVAL_MAX_TOTAL_REVISION_PAGES") or self._revision_policy.get("max_total_revision_pages", 4)
         try:
             return max(1, int(value))
         except (TypeError, ValueError):
@@ -279,6 +283,18 @@ class EvaluatorAgent:
                 )
 
                 raw = response.choices[0].message.content
+                record_usage(
+                    component="ppt_visual_qa",
+                    operation="evaluate_slide_image",
+                    provider=config.QWEN_BASE_URL,
+                    model=config.QWEN_VL_MODEL,
+                    usage=getattr(response, "usage", None),
+                    estimated_input_tokens=estimate_tokens_from_text(system + "\n" + current_user_text),
+                    estimated_output_tokens=estimate_tokens_from_text(str(raw or "")),
+                    image_count=1,
+                    vl_image_count=1,
+                    metadata={"attempt": attempt, "image_path": str(image_path)},
+                )
                 data = self._parse_json(raw)
                 if last_error_signature:
                     repair_instruction = self._repair_orchestrator.build_repair_instruction(
@@ -341,6 +357,8 @@ class EvaluatorAgent:
     def needs_revision(self, result: SlideEvalResult) -> bool:
         if result.overall < config.EVAL_SCORE_THRESHOLD:
             return True
+        if self._strict_book_dimension_qa_enabled() and self._has_low_dimension_score(result):
+            return True
         matched_groups = self._matched_severe_groups(result.issues)
         if not matched_groups:
             return False
@@ -353,9 +371,10 @@ class EvaluatorAgent:
         force_revision = any(bool(group.get("force_revision", False)) for group in matched_groups)
         hard_fail = result.overall < config.EVAL_SCORE_THRESHOLD
         min_dimension = min(result.layout_score, result.content_score, result.design_score)
+        strict_dimension_fail = self._strict_book_dimension_qa_enabled() and min_dimension < self.strict_dimension_threshold
         issue_count = len(result.issues or [])
         return (
-            0 if hard_fail else 1 if force_revision else 2,
+            0 if hard_fail else 1 if strict_dimension_fail else 2 if force_revision else 3,
             float(result.overall),
             float(min_dimension),
             -issue_count,
@@ -363,6 +382,30 @@ class EvaluatorAgent:
 
     def is_hard_fail(self, result: SlideEvalResult) -> bool:
         return result.overall < config.EVAL_SCORE_THRESHOLD
+
+    def is_strict_dimension_fail(self, result: SlideEvalResult) -> bool:
+        return self._strict_book_dimension_qa_enabled() and self._has_low_dimension_score(result)
+
+    @staticmethod
+    def _strict_book_ppt_qa_enabled() -> bool:
+        return os.getenv("DIRECTIONAI_BOOK_PPT_STRICT_QA", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    @staticmethod
+    def _strict_book_dimension_qa_enabled() -> bool:
+        return os.getenv("DIRECTIONAI_BOOK_PPT_DIMENSION_QA", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    def _has_low_dimension_score(self, result: SlideEvalResult) -> bool:
+        return min(result.layout_score, result.content_score, result.design_score) < self.strict_dimension_threshold
 
     def is_force_issue_fail(self, result: SlideEvalResult) -> bool:
         matched_groups = self._matched_severe_groups(result.issues)
@@ -417,6 +460,29 @@ class EvaluatorAgent:
                         scores[score_name] = min(scores[score_name], float(cap))
                     except (TypeError, ValueError):
                         continue
+
+        if self._strict_book_dimension_qa_enabled():
+            low_dimensions = [
+                label
+                for score_name, label in (
+                    ("layout_score", "布局"),
+                    ("content_score", "内容"),
+                    ("design_score", "设计"),
+                )
+                if scores[score_name] < self.strict_dimension_threshold
+            ]
+            if low_dimensions:
+                dimension_text = "、".join(low_dimensions)
+                issue = f"{dimension_text}单项低于教师课件交付阈值"
+                suggestion = (
+                    "优先修复低分单项：布局低分先重排阅读路径、对齐和留白；"
+                    "内容低分先减少屏幕文字并补课堂任务；设计低分先统一层级、对比度和主视觉。"
+                    "深色底上只能放白色或接近白色正文，浅色底上只能放深色正文，禁止低对比灰字、透明正文和文字压线。"
+                )
+                if issue not in issues:
+                    issues.append(issue)
+                if suggestion not in suggestions:
+                    suggestions.append(suggestion)
 
         # Keep issues/suggestions compact but make sure hard failures have an action.
         if self._has_severe_issue(issues) and not suggestions:

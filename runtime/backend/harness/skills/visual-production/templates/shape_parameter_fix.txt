@@ -1,1 +1,1 @@
-修正所有 `addShape()` 的第一个参数：请使用合法形状值，例如 `\"rect\"`、`\"ellipse\"`、`\"line\"`、`\"roundRect\"`，或等价的 `pres.shapes.RECTANGLE/OVAL/LINE/ROUNDED_RECTANGLE`。
+修正所有 `addShape()` 的第一个参数：请使用合法字符串形状值，例如 `\"rect\"`、`\"ellipse\"`、`\"line\"`、`\"roundRect\"`；不要使用 `pres.shapes.RECTANGLE/OVAL/LINE`、`pptx.ShapeType.rect` 等常量写法。

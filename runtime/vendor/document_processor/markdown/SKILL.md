@@ -118,7 +118,7 @@ def strip_frontmatter(text: str) -> str:
 
 ## Integration Notes
 
-For pptagent pipeline:
+For PPT generation pipeline:
 1. Read raw markdown → pass to document-summarizer skill
 2. Markdown naturally preserves structure (headings, lists, code) — summarizer handles section detection
 3. Estimate page count: `max(1, len(text) // 3000)` (rough estimate based on character count)

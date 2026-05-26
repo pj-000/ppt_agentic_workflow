@@ -108,7 +108,7 @@ pdftotext -f 1 -l 5 input.pdf output.txt
 
 ## Integration Notes
 
-For pptagent pipeline:
+For PPT generation pipeline:
 1. Extract text → pass to document-summarizer skill
 2. Extract tables → pass alongside text to summarizer
 3. Combine pages with double newline: `"\n\n".join(text_parts)`

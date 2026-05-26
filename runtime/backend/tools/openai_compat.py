@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import inspect
+import os
 from typing import Any, Awaitable, Callable
+
+from backend.tools.usage_recorder import (
+    estimate_tokens_from_messages,
+    estimate_tokens_from_text,
+    record_usage,
+)
 
 
 def model_supports_reasoning(model: str | None) -> bool:
@@ -36,19 +44,40 @@ def stream_chat_completion_text(
     on_reasoning_chunk: Callable[[str], None] | None = None,
     **kwargs: Any,
 ) -> tuple[str, str]:
-    stream = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        stream=True,
-        **kwargs,
-    )
+    usage_requested = False
+    stream_kwargs = dict(kwargs)
+    if _should_request_stream_usage() and "stream_options" not in stream_kwargs:
+        stream_kwargs["stream_options"] = {"include_usage": True}
+        usage_requested = True
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            **stream_kwargs,
+        )
+    except Exception:
+        if not usage_requested:
+            raise
+        stream_kwargs.pop("stream_options", None)
+        usage_requested = False
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            **stream_kwargs,
+        )
 
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     content_buffer = ""
     reasoning_buffer = ""
+    usage = None
 
     for chunk in stream:
+        chunk_usage = getattr(chunk, "usage", None)
+        if chunk_usage is not None:
+            usage = chunk_usage
         choices = getattr(chunk, "choices", None) or []
         if not choices:
             continue
@@ -74,7 +103,18 @@ def stream_chat_completion_text(
                 content_chunk = new_content
             content_parts.append(content_chunk)
 
-    return "".join(content_parts), "".join(reasoning_parts).strip()
+    content_text = "".join(content_parts)
+    reasoning_text = "".join(reasoning_parts).strip()
+    record_usage(
+        component="ppt_runtime_llm",
+        operation=_caller_operation(),
+        model=model,
+        usage=usage,
+        estimated_input_tokens=estimate_tokens_from_messages(messages),
+        estimated_output_tokens=estimate_tokens_from_text(content_text + "\n" + reasoning_text),
+        metadata={"stream": True, "usage_requested": usage_requested},
+    )
+    return content_text, reasoning_text
 
 
 async def async_stream_chat_completion_text(
@@ -85,19 +125,40 @@ async def async_stream_chat_completion_text(
     on_reasoning_chunk: Callable[[str], Awaitable[None] | None] | Callable[[str], None] | None = None,
     **kwargs: Any,
 ) -> tuple[str, str]:
-    stream = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        stream=True,
-        **kwargs,
-    )
+    usage_requested = False
+    stream_kwargs = dict(kwargs)
+    if _should_request_stream_usage() and "stream_options" not in stream_kwargs:
+        stream_kwargs["stream_options"] = {"include_usage": True}
+        usage_requested = True
+    try:
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            **stream_kwargs,
+        )
+    except Exception:
+        if not usage_requested:
+            raise
+        stream_kwargs.pop("stream_options", None)
+        usage_requested = False
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            **stream_kwargs,
+        )
 
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     content_buffer = ""
     reasoning_buffer = ""
+    usage = None
 
     async for chunk in stream:
+        chunk_usage = getattr(chunk, "usage", None)
+        if chunk_usage is not None:
+            usage = chunk_usage
         choices = getattr(chunk, "choices", None) or []
         if not choices:
             continue
@@ -125,7 +186,33 @@ async def async_stream_chat_completion_text(
                 content_chunk = new_content
             content_parts.append(content_chunk)
 
-    return "".join(content_parts), "".join(reasoning_parts).strip()
+    content_text = "".join(content_parts)
+    reasoning_text = "".join(reasoning_parts).strip()
+    record_usage(
+        component="ppt_runtime_llm",
+        operation=_caller_operation(),
+        model=model,
+        usage=usage,
+        estimated_input_tokens=estimate_tokens_from_messages(messages),
+        estimated_output_tokens=estimate_tokens_from_text(content_text + "\n" + reasoning_text),
+        metadata={"stream": True, "usage_requested": usage_requested},
+    )
+    return content_text, reasoning_text
+
+
+def _should_request_stream_usage() -> bool:
+    return bool(os.getenv("DIRECTIONAI_BOOK_TOKEN_USAGE_LOG") or os.getenv("DIRECTIONAI_TOKEN_USAGE_LOG")) and (
+        os.getenv("DIRECTIONAI_TOKEN_USAGE_STREAM_OPTIONS", "1").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
+def _caller_operation() -> str:
+    try:
+        frame = inspect.stack()[2]
+        return f"{frame.function}"
+    except Exception:
+        return "stream_chat_completion"
 
 
 def extract_reasoning_text(response: object) -> str:

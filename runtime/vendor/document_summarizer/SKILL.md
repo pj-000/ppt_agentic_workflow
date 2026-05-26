@@ -22,7 +22,7 @@ PDF/Word → extract text → this summarizer → structured_summary
                                                     ↓
                                           PPT outline planner
                                                     ↓
-                                         逐页生成 + QA (pptagent)
+                                          逐页生成 + QA (PPT runtime)
 ```
 
 The `sections` array maps to PPT slide groups (each section typically covers 1-3 slides).

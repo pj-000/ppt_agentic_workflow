@@ -22,6 +22,10 @@ from backend.tools.openai_compat import _extract_text_from_obj
 
 logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
+DEFAULT_SEARCH_RESULT_BUDGET = 5
+MIN_SEARCH_RESULT_BUDGET = 2
+MAX_SEARCH_RESULT_BUDGET = 10
+OUTLINE_CONTEXT_PREFIXES = ("页面位置：", "上一页主题：", "下一页主题：", "邻近页面脉络：")
 
 
 class ResearchAgent:
@@ -69,10 +73,6 @@ class ResearchAgent:
         self.search_callback = search_callback
         self._system_template = self._composer.load_research_synthesis_system_prompt()
         self._user_template = self._composer.load_research_synthesis_user_prompt_template()
-        self._budget_system_template = self._composer.load_research_budgeting_system_prompt()
-        self._budget_user_template = self._composer.load_research_budgeting_user_prompt_template()
-        self._budget_rebalance_system_template = self._composer.load_research_budget_rebalance_system_prompt()
-        self._budget_rebalance_user_template = self._composer.load_research_budget_rebalance_user_prompt_template()
         self._degraded_notice_template = self._composer.load_research_degraded_notice_template()
 
     def _record_prompt_bundle(
@@ -104,134 +104,232 @@ class ResearchAgent:
         if self.thinking_callback:
             self.thinking_callback(chunk)
 
-    async def _decide_search_result_budget(self, slide: SlideSpec, language: str) -> int:
-        if not self.client:
-            return 5
-
+    def _slide_search_context(self, slide: SlideSpec, hint_limit: int = 8) -> dict:
+        topic = str(slide.topic or "").strip()
         hint_lines: list[str] = []
         seen_lines: set[str] = set()
+        core_descriptions = self._core_slide_descriptions(slide, limit=4)
+        deck_context = self._deck_context_lines(slide)
         for item in slide.elements:
             line = str(getattr(item, "content", "") or "").strip()
-            if not line or line == (slide.topic or "").strip() or line in seen_lines:
+            if not line or line == topic or line in seen_lines:
                 continue
             seen_lines.add(line)
-            hint_lines.append(line)
-            if len(hint_lines) >= 6:
+            item_type = str(getattr(item, "type", "") or "body").strip() or "body"
+            hint_lines.append(f"{item_type}: {line[:180]}")
+            if len(hint_lines) >= hint_limit:
                 break
 
-        objective = slide.speaker_notes or ""
-        user_prompt = self._budget_user_template.format(
-            language=language,
-            layout=slide.layout.value,
-            topic=slide.topic or "",
-            objective=objective,
-            existing_hints="\n".join(hint_lines) or "无",
+        return {
+            "slide_index": slide.slide_index,
+            "layout": slide.layout.value,
+            "topic": topic,
+            "objective": "\n".join(core_descriptions),
+            "deck_context": deck_context,
+            "text_hints": hint_lines,
+            "fallback_query": self._fallback_search_query(slide),
+        }
+
+    def _is_outline_context_line(self, line: str) -> bool:
+        return any(line.startswith(prefix) for prefix in OUTLINE_CONTEXT_PREFIXES)
+
+    def _deck_context_lines(self, slide: SlideSpec) -> list[str]:
+        lines = []
+        for line in str(slide.speaker_notes or "").splitlines():
+            cleaned = line.strip()
+            if cleaned and self._is_outline_context_line(cleaned):
+                lines.append(cleaned)
+        return lines
+
+    def _core_slide_descriptions(self, slide: SlideSpec, limit: int = 3) -> list[str]:
+        topic = str(slide.topic or "").strip()
+        descriptions: list[str] = []
+        seen: set[str] = set()
+
+        def add_line(raw: str) -> None:
+            line = re.sub(r"\s+", " ", str(raw or "").strip())
+            if (
+                not line
+                or line == topic
+                or line in seen
+                or self._is_outline_context_line(line)
+            ):
+                return
+            seen.add(line)
+            descriptions.append(line)
+
+        for line in str(slide.speaker_notes or "").splitlines():
+            add_line(line)
+        for item in slide.elements:
+            add_line(getattr(item, "content", "") or "")
+        return descriptions[:limit]
+
+    def _fallback_search_query(self, slide: SlideSpec) -> str:
+        parts = [str(slide.topic or "").strip()]
+        parts.extend(self._core_slide_descriptions(slide, limit=2))
+        query = " ".join(part for part in parts if part)
+        return re.sub(r"\s+", " ", query).strip()[:120]
+
+    def _is_title_only_query(self, query: str, slide: SlideSpec) -> bool:
+        normalized_query = re.sub(r"\s+", "", query or "")
+        normalized_topic = re.sub(r"\s+", "", str(slide.topic or ""))
+        return bool(normalized_topic) and normalized_query == normalized_topic
+
+    def _fallback_search_plan(self, slide: SlideSpec) -> dict:
+        return {
+            "slide_index": slide.slide_index,
+            "budget": DEFAULT_SEARCH_RESULT_BUDGET,
+            "query": self._fallback_search_query(slide),
+            "reason": "model-fallback",
+        }
+
+    def _strip_json_fence(self, content: str) -> str:
+        cleaned = content.strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        return cleaned.strip()
+
+    def _parse_json_array(self, content: str) -> list | None:
+        cleaned = self._strip_json_fence(content)
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                for key in ("slides", "plans", "items", "data"):
+                    value = parsed.get(key)
+                    if isinstance(value, list):
+                        return value
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            pass
+
+        start = cleaned.find("[")
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(cleaned)):
+            char = cleaned[index]
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(cleaned[start:index + 1])
+                        return parsed if isinstance(parsed, list) else None
+                    except Exception:
+                        return None
+        return None
+
+    def _coerce_search_plan(self, raw_plan, slide: SlideSpec) -> dict:
+        fallback = self._fallback_search_plan(slide)
+        budget_value = None
+        query_value = ""
+        reason_value = ""
+
+        if isinstance(raw_plan, dict):
+            budget_value = (
+                raw_plan.get("budget")
+                or raw_plan.get("max_results")
+                or raw_plan.get("result_count")
+                or raw_plan.get("count")
+            )
+            query_value = str(raw_plan.get("query") or raw_plan.get("search_query") or "").strip()
+            reason_value = str(raw_plan.get("reason") or raw_plan.get("rationale") or "").strip()
+        else:
+            budget_value = raw_plan
+
+        try:
+            budget = max(MIN_SEARCH_RESULT_BUDGET, min(MAX_SEARCH_RESULT_BUDGET, int(budget_value)))
+        except Exception:
+            budget = fallback["budget"]
+
+        if not query_value or self._is_title_only_query(query_value, slide):
+            query_value = fallback["query"]
+
+        return {
+            "slide_index": slide.slide_index,
+            "budget": budget,
+            "query": query_value,
+            "reason": reason_value or fallback["reason"],
+        }
+
+    def _align_search_plans(self, parsed: list, slides: list[SlideSpec]) -> list[dict] | None:
+        if len(parsed) != len(slides):
+            return None
+
+        indexed: dict[int, object] = {}
+        has_slide_indexes = False
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            raw_index = item.get("slide_index")
+            if raw_index is None:
+                raw_index = item.get("page")
+            if raw_index is None:
+                raw_index = item.get("page_index")
+            try:
+                indexed[int(raw_index)] = item
+                has_slide_indexes = True
+            except Exception:
+                continue
+
+        plans: list[dict] = []
+        for position, slide in enumerate(slides):
+            raw_plan = indexed.get(slide.slide_index) if has_slide_indexes else parsed[position]
+            if raw_plan is None:
+                return None
+            plans.append(self._coerce_search_plan(raw_plan, slide))
+        return plans
+
+    async def _decide_search_plans(self, slides: list[SlideSpec], language: str) -> list[dict]:
+        if not slides:
+            return []
+        fallback_plans = [self._fallback_search_plan(slide) for slide in slides]
+        if not self.client:
+            return fallback_plans
+
+        slide_contexts = [self._slide_search_context(slide) for slide in slides]
+        system_prompt = (
+            "你负责直接为整套 PPT 的 research 阶段决定每页网页检索计划。\n"
+            "必须根据每页的 topic、objective、text_hints、layout 的真实信息需求独立判断，"
+            "不要套用固定规则，不要平均分配，不要把 5 当成默认安全答案。\n"
+            "输出只能是 JSON 数组，数组长度必须等于输入页数。每个对象字段："
+            "slide_index、budget、query、reason。\n"
+            f"budget 必须是 {MIN_SEARCH_RESULT_BUDGET} 到 {MAX_SEARCH_RESULT_BUDGET} 之间的整数；"
+            "query 是适合搜索引擎的短查询词，必须结合 topic 和 objective 的核心信息；"
+            "不要机械只复制标题，也不要粘贴整段长句，优先输出 8 到 30 个中文字/词的关键词组合；"
+            "reason 不超过 20 个中文字符。\n"
+            "不要输出 Markdown、代码块或解释。"
+        )
+        user_prompt = (
+            f"语言：{language}\n"
+            "请直接判断下面每页需要抓取多少条候选网页资料，并为每页生成检索 query。\n"
+            f"页面信息 JSON：\n{json.dumps(slide_contexts, ensure_ascii=False)}"
         )
 
         if self.harness_trace:
             self.harness_trace.record(
-                stage="research_budgeting",
+                stage="research_search_planning",
                 payload={
-                    "mode": "decision",
-                    "topic": slide.topic,
-                    "slide_index": slide.slide_index,
-                    "layout": slide.layout.value,
-                    "prompt_excerpt": user_prompt[:400],
+                    "mode": "deck_decision",
+                    "slide_count": len(slides),
+                    "prompt_excerpt": user_prompt[:800],
                 },
             )
-
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model_id,
-                messages=[
-                    {"role": "system", "content": self._budget_system_template},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,
-                max_tokens=8,
-            )
-            message = getattr(response.choices[0], "message", None)
-            raw_content = getattr(message, "content", "") if message is not None else ""
-            content = _extract_text_from_obj(raw_content) or str(raw_content or "")
-            match = re.search(r"\d+", content)
-            if match:
-                budget = max(2, min(10, int(match.group(0))))
-                logger.info(
-                    "[Research] 预算判定 slide=%s layout=%s budget=%s raw=%s",
-                    slide.topic,
-                    slide.layout.value,
-                    budget,
-                    content[:80],
-                )
-                if self.harness_trace:
-                    self.harness_trace.record(
-                        stage="research_budgeting",
-                        payload={
-                            "mode": "decision_result",
-                            "topic": slide.topic,
-                            "slide_index": slide.slide_index,
-                            "layout": slide.layout.value,
-                            "budget": budget,
-                            "raw_output": content[:120],
-                            "model": self.model_id,
-                        },
-                    )
-                return budget
-            if self.harness_trace:
-                self.harness_trace.record(
-                    stage="research_budgeting",
-                    payload={
-                        "mode": "decision_unparsed",
-                        "topic": slide.topic,
-                        "slide_index": slide.slide_index,
-                        "layout": slide.layout.value,
-                        "raw_output": content[:200],
-                    },
-                )
-            logger.warning("[Research] 预算判定未解析到数字 slide=%s raw=%s", slide.topic, content[:120])
-        except Exception as exc:
-            logger.warning("[Research] 预算判定失败，使用默认值 slide=%s error=%s", slide.topic, exc)
-            if self.harness_trace:
-                self.harness_trace.record(
-                    stage="research_budgeting",
-                    payload={
-                        "mode": "decision_error",
-                        "topic": slide.topic,
-                        "slide_index": slide.slide_index,
-                        "layout": slide.layout.value,
-                        "error": str(exc),
-                    },
-                )
-        return 5
-
-    async def _rebalance_search_result_budgets(
-        self,
-        slides: list[SlideSpec],
-        initial_budgets: list[int],
-        language: str,
-    ) -> list[int]:
-        if not self.client or not slides:
-            return initial_budgets
-
-        slide_lines: list[str] = []
-        for idx, (slide, budget) in enumerate(zip(slides, initial_budgets), start=1):
-            objective = str(slide.speaker_notes or "").strip() or "无"
-            hint_lines: list[str] = []
-            for item in slide.elements[:4]:
-                content = str(getattr(item, "content", "") or "").strip()
-                if content and content != (slide.topic or ""):
-                    hint_lines.append(content)
-            hints = " / ".join(hint_lines[:3]) or "无"
-            slide_lines.append(
-                f"{idx}. layout={slide.layout.value}; topic={slide.topic}; objective={objective}; hints={hints}; first_budget={budget}"
-            )
-
-        system_prompt = self._budget_rebalance_system_template
-        user_prompt = self._budget_rebalance_user_template.format(
-            language=language,
-            slide_count=len(slides),
-            slide_lines="\n".join(slide_lines),
-        )
 
         try:
             response = await self.client.chat.completions.create(
@@ -241,76 +339,52 @@ class ResearchAgent:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.2,
-                max_tokens=min(128, max(32, len(slides) * 8)),
+                max_tokens=min(4096, max(512, len(slides) * 160)),
             )
             message = getattr(response.choices[0], "message", None)
             raw_content = getattr(message, "content", "") if message is not None else ""
             content = _extract_text_from_obj(raw_content) or str(raw_content or "")
-            parsed = json.loads(content)
-            if isinstance(parsed, list) and len(parsed) == len(slides):
-                budgets = [max(2, min(10, int(item))) for item in parsed]
-                if len(set(budgets)) > 1:
-                    logger.info("[Research] deck budget rebalance succeeded budgets=%s", budgets)
-                    if self.harness_trace:
-                        self.harness_trace.record(
-                            stage="research_budgeting",
-                            payload={
-                                "mode": "deck_rebalance_result",
-                                "budgets": budgets,
-                                "raw_output": content[:240],
-                                "slide_count": len(slides),
-                            },
-                        )
-                    return budgets
-            logger.warning("[Research] deck budget rebalance output invalid raw=%s", content[:200])
+            parsed = self._parse_json_array(content)
+            plans = self._align_search_plans(parsed, slides) if isinstance(parsed, list) else None
+            if plans:
+                logger.info(
+                    "[Research] 搜索计划判定完成 budgets=%s queries=%s",
+                    [plan["budget"] for plan in plans],
+                    [plan["query"] for plan in plans],
+                )
+                if self.harness_trace:
+                    self.harness_trace.record(
+                        stage="research_search_planning",
+                        payload={
+                            "mode": "deck_decision_result",
+                            "plans": plans,
+                            "raw_output": content[:800],
+                            "model": self.model_id,
+                        },
+                    )
+                return plans
+            logger.warning("[Research] 搜索计划未解析，使用默认计划 raw=%s", content[:240])
             if self.harness_trace:
                 self.harness_trace.record(
-                    stage="research_budgeting",
+                    stage="research_search_planning",
                     payload={
-                        "mode": "deck_rebalance_invalid",
-                        "raw_output": content[:240],
+                        "mode": "deck_decision_invalid",
+                        "raw_output": content[:800],
                         "slide_count": len(slides),
                     },
                 )
         except Exception as exc:
-            logger.warning("[Research] deck budget rebalance failed error=%s", exc)
+            logger.warning("[Research] 搜索计划判定失败，使用默认计划 error=%s", exc)
             if self.harness_trace:
                 self.harness_trace.record(
-                    stage="research_budgeting",
+                    stage="research_search_planning",
                     payload={
-                        "mode": "deck_rebalance_error",
+                        "mode": "deck_decision_error",
                         "error": str(exc),
                         "slide_count": len(slides),
                     },
                 )
-        return initial_budgets
-
-    async def _decide_search_result_budgets(
-        self,
-        slides: list[SlideSpec],
-        language: str,
-        concurrency: int,
-    ) -> list[int]:
-        if not slides:
-            return []
-
-        sem = asyncio.Semaphore(max(1, concurrency))
-
-        async def _bounded(slide: SlideSpec) -> int:
-            async with sem:
-                return await self._decide_search_result_budget(slide, language)
-
-        budgets = list(await asyncio.gather(*[_bounded(slide) for slide in slides]))
-        if len(slides) <= 1:
-            return budgets
-
-        repeated_ratio = max((budgets.count(value) / len(budgets)) for value in set(budgets))
-        if len(set(budgets)) == 1 or repeated_ratio >= 0.8:
-            logger.info("[Research] initial budgets too uniform=%s, trying deck rebalance", budgets)
-            rebalanced = await self._rebalance_search_result_budgets(slides, budgets, language)
-            if len(rebalanced) == len(budgets):
-                return rebalanced
-        return budgets
+        return fallback_plans
 
     async def research_topic(self, topic: str, language: str = "中文") -> dict:
         """
@@ -348,6 +422,8 @@ class ResearchAgent:
         slide: SlideSpec,
         language: str = "中文",
         search_result_budget: int | None = None,
+        search_query: str | None = None,
+        search_budget_reason: str | None = None,
     ) -> dict | None:
         """
         对单页做检索 + LLM 提炼。
@@ -372,11 +448,19 @@ class ResearchAgent:
             search_provider = self.search_backend.provider if self.search_backend else "search-disabled"
             search_error = ""
             search_error_signature: str | None = None
-            if search_result_budget is None:
-                search_result_budget = await self._decide_search_result_budget(slide, language)
+            if search_result_budget is None or not search_query:
+                plans = await self._decide_search_plans([slide], language)
+                plan = plans[0] if plans else self._fallback_search_plan(slide)
+                if search_result_budget is None:
+                    search_result_budget = int(plan.get("budget") or DEFAULT_SEARCH_RESULT_BUDGET)
+                if not search_query:
+                    search_query = str(plan.get("query") or slide.topic or "").strip()
+                if not search_budget_reason:
+                    search_budget_reason = str(plan.get("reason") or "").strip()
+            search_query = str(search_query or slide.topic or "").strip()
             try:
                 search_items = await self.search_backend.search_text_results(
-                    slide.topic,
+                    search_query,
                     max_results=search_result_budget,
                 )
             except Exception as exc:
@@ -392,6 +476,8 @@ class ResearchAgent:
                     {
                         "slide_index": slide.slide_index,
                         "topic": slide.topic,
+                        "query": search_query,
+                        "budget_reason": search_budget_reason or "",
                         "provider": search_provider,
                         "snippet_count": len(search_items),
                         "items": search_items,
@@ -565,13 +651,25 @@ class ResearchAgent:
     ) -> list[dict | None]:
         """并发研究所有页面，返回列表长度与 slides 一致。"""
         sem = asyncio.Semaphore(concurrency)
-        budgets = await self._decide_search_result_budgets(slides, language, concurrency)
+        search_plans = await self._decide_search_plans(slides, language)
 
-        async def _bounded(slide: SlideSpec, budget: int):
+        async def _bounded(slide: SlideSpec, plan: dict):
             async with sem:
-                return await self.research_slide(slide, language, search_result_budget=budget)
+                return await self.research_slide(
+                    slide,
+                    language,
+                    search_result_budget=int(plan.get("budget") or DEFAULT_SEARCH_RESULT_BUDGET),
+                    search_query=str(plan.get("query") or slide.topic or "").strip(),
+                    search_budget_reason=str(plan.get("reason") or "").strip(),
+                )
 
-        results = await asyncio.gather(*[_bounded(slide, budgets[index] if index < len(budgets) else 5) for index, slide in enumerate(slides)])
+        results = await asyncio.gather(*[
+            _bounded(
+                slide,
+                search_plans[index] if index < len(search_plans) else self._fallback_search_plan(slide),
+            )
+            for index, slide in enumerate(slides)
+        ])
         return list(results)
 
     def _parse_json(self, raw: str) -> dict:
