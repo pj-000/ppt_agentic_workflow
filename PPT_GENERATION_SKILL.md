@@ -1,43 +1,29 @@
 ---
 name: ppt-generation
-description: Use this skill when the user requests PPT/PPTX generation. It bundles the full outline planning, slide generation, evaluation, preview, and download workflow inside the skill runtime rather than scattering the logic across prompts.
+description: Deprecated compatibility manifest for the PPT Generation Agent Harness. Keep this file for legacy skill discovery; current development should follow the harness positioning docs.
 ---
 
-# PPT Generation Skill
+# PPT Generation Skill Compatibility Manifest
 
-This skill owns the complete PPT workflow as executable runtime code. The orchestration logic lives in [`assets/runtime`](assets/runtime), and the reusable bridge entrypoint lives in [`scripts/runtime.py`](scripts/runtime.py).
+This root-level skill manifest is kept for compatibility with older skill
+discovery and gateway flows. It no longer defines the project architecture.
 
-## When To Use
+Current project positioning:
 
-Use this skill when the request is to:
+> This project is not a fully autonomous multi-agent system. It is a controlled
+> agentic workflow executed by a PPT Generation Agent Harness.
 
-- generate a new PPT or teaching presentation
-- upload source documents and derive a PPT outline
-- confirm an outline and render the final PPT
-- evaluate an existing PPT draft
-- fetch preview images or download the generated PPT
+The active architecture direction is documented in:
 
-## Runtime Contract
+- [`docs/agent_harness_positioning.md`](docs/agent_harness_positioning.md)
+- [`docs/architecture_overview.md`](docs/architecture_overview.md)
+- [`docs/refactor_guardrails.md`](docs/refactor_guardrails.md)
 
-The host should call the skill runtime entrypoints in `scripts/runtime.py` instead of re-implementing the flow in prompts.
+For new implementation work, preserve the existing `OrchestratorAgent`,
+`PlannerAgent`, `ResearchAgent`, `AssetAgent`, `EvaluatorAgent`,
+`RuntimeMemoryStore`, `RepairOrchestrator`, CLI, and FastAPI contracts.
+Add harness capability through adapters, wrappers, and facades rather than
+rewriting the generation backend.
 
-Available entrypoints:
-
-- `upload_document_route`
-- `stream_ppt_outline_route`
-- `stream_ppt_from_outline_route`
-- `stream_evaluate_ppt_route`
-- `download_ppt_route`
-- `preview_ppt_image_route`
-
-## Bundled Assets
-
-- `assets/runtime/api.py`: full FastAPI-compatible PPT workflow
-- `assets/runtime/backend/`: orchestrator, planning, rendering, evaluation, preview helpers
-- `scripts/generate.py`: standalone PPTX assembly utility for image-to-deck composition
-
-## Notes
-
-- Keep the skill body lean; the detailed implementation belongs in the bundled runtime.
-- When extending the PPT workflow, update `assets/runtime/` or `scripts/runtime.py` instead of pushing complex logic back into prompt text.
-- This skill is designed to be triggered by DeerFlow or a thin gateway bridge, so the API contract should remain stable.
+This compatibility manifest should not be used as the source of truth for new
+phase planning.

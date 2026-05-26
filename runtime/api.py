@@ -29,6 +29,7 @@ from backend.harness.agents.document_summary import (
     summarize_document,
 )
 from backend.harness.agents.orchestrator import OrchestratorAgent
+from backend.harness.quality import write_quality_report_safely
 from backend.harness.runtime import (
     HarnessTrace,
     get_learned_skill_registry,
@@ -1382,6 +1383,18 @@ def generate_ppt_bundle(
             preview_images,
             visual_qa_enabled=orchestrator.evaluator.enabled,
         )
+        write_quality_report_safely(
+            output_root=OUTPUT_ROOT,
+            run_id=orchestrator.harness_trace.run_id,
+            topic=req.topic,
+            pptx_path=result_path,
+            preview_images=preview_images,
+            extracted_text=final_markdown,
+            visual_eval_results=getattr(orchestrator, "_last_visual_eval_results", []),
+            content_issues=content_issues,
+            repair_events=getattr(orchestrator, "_last_repair_events", []),
+            harness_trace=orchestrator.harness_trace,
+        )
         harness_trace = orchestrator.harness_trace.to_dict()
         harness_trace_path = _write_harness_trace(Path(result_path).name, result_path, harness_trace)
         end_step(current_step, "组装与校验PPT")
@@ -2130,6 +2143,18 @@ def _generate_from_outline_bundle(
             result_path,
             preview_images,
             visual_qa_enabled=orchestrator.evaluator.enabled,
+        )
+        write_quality_report_safely(
+            output_root=OUTPUT_ROOT,
+            run_id=orchestrator.harness_trace.run_id,
+            topic=outline.topic or req.topic,
+            pptx_path=result_path,
+            preview_images=preview_images,
+            extracted_text=final_markdown,
+            visual_eval_results=getattr(orchestrator, "_last_visual_eval_results", []),
+            content_issues=content_issues,
+            repair_events=getattr(orchestrator, "_last_repair_events", []),
+            harness_trace=orchestrator.harness_trace,
         )
         harness_trace = orchestrator.harness_trace.to_dict()
         harness_trace_path = _write_harness_trace(Path(result_path).name, result_path, harness_trace)
