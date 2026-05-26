@@ -31,6 +31,7 @@ def summarize_trace_events(events: list[TraceEvent]) -> dict[str, Any]:
         "status": status,
         "phase_count": len(phases),
         "tool_call_count": len(tool_finished),
+        "tool_attempt_count": len(tool_finished),
         "failed_tool_count": sum(1 for event in tool_finished if event.status == "failed"),
         "skipped_tool_count": sum(1 for event in tool_finished if event.status == "skipped"),
         "timeout_tool_count": sum(1 for event in tool_finished if event.status == "timeout"),
@@ -45,12 +46,15 @@ def _summarize_status(events: list[TraceEvent], tool_finished: list[TraceEvent])
     has_success_finish = any(
         event.event_type == "run.finished" and event.status == "success" for event in events
     )
+    has_failed_finish = any(
+        event.event_type == "run.finished" and event.status == "failed" for event in events
+    )
     has_failed_phase = any(event.event_type == "phase.failed" for event in events)
-    has_failed_tool = any(event.status == "failed" for event in tool_finished)
+    has_degraded_tool = any(event.status in {"failed", "timeout", "skipped"} for event in tool_finished)
 
-    if has_failed_phase:
+    if has_failed_finish or has_failed_phase:
         return "failed"
-    if has_failed_tool:
+    if has_degraded_tool:
         return "warning"
     if has_success_finish:
         return "success"

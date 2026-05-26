@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -90,7 +91,10 @@ def test_trace_store_appends_loads_and_writes_summary(tmp_path: Path) -> None:
     assert (tmp_path / "runs" / "run_store" / "trace_summary.json").exists()
     assert (tmp_path / "runs" / "run_store" / "trace_summary.md").exists()
     assert summary["failed_tool_count"] == 1
+    assert summary["tool_attempt_count"] == 1
     assert summary["status"] == "warning"
+    markdown = (tmp_path / "runs" / "run_store" / "trace_summary.md").read_text(encoding="utf-8")
+    assert "Tool Attempt Count" in markdown
 
 
 def test_trace_store_load_returns_empty_when_missing(tmp_path: Path) -> None:
@@ -121,12 +125,58 @@ def test_summarize_trace_events_counts_tools_errors_artifacts_and_quality_paths(
     assert summary["total_events"] == 6
     assert summary["phase_count"] == 2
     assert summary["tool_call_count"] == 2
+    assert summary["tool_attempt_count"] == 2
     assert summary["failed_tool_count"] == 0
     assert summary["skipped_tool_count"] == 1
     assert summary["timeout_tool_count"] == 1
     assert summary["error_signatures"] == ["ppt.render_preview:TimeoutError:libreoffice_timeout"]
     assert summary["artifact_refs"]["pptx_path"] == "deck.pptx"
     assert "quality_report.json" in summary["quality_report_paths"]
+
+
+def test_summarize_trace_events_marks_failed_run_as_failed() -> None:
+    summary = summarize_trace_events([_event("run.finished", status="failed")])
+
+    assert summary["status"] == "failed"
+
+
+def test_summarize_trace_events_marks_skipped_tool_as_warning() -> None:
+    summary = summarize_trace_events(
+        [
+            _event("tool.finished", tool_name="search.web_text", status="skipped"),
+            _event("run.finished", status="success"),
+        ]
+    )
+
+    assert summary["status"] == "warning"
+
+
+def test_summarize_trace_events_marks_timeout_tool_as_warning() -> None:
+    summary = summarize_trace_events(
+        [
+            _event("tool.finished", tool_name="ppt.render_preview", status="timeout"),
+            _event("run.finished", status="success"),
+        ]
+    )
+
+    assert summary["status"] == "warning"
+
+
+def test_summarize_trace_events_marks_failed_tool_as_warning() -> None:
+    summary = summarize_trace_events(
+        [
+            _event("tool.finished", tool_name="ppt.run_pptxgenjs", status="failed"),
+            _event("run.finished", status="success"),
+        ]
+    )
+
+    assert summary["status"] == "warning"
+
+
+def test_summarize_trace_events_marks_incomplete_run_as_incomplete() -> None:
+    summary = summarize_trace_events([_event("run.started", status="running")])
+
+    assert summary["status"] == "incomplete"
 
 
 def test_redact_trace_payload_filters_sensitive_keys_values_and_long_strings() -> None:
@@ -141,6 +191,15 @@ def test_redact_trace_payload_filters_sensitive_keys_values_and_long_strings() -
             "hidden_reasoning": "private",
             "chain_of_thought": "private",
             "raw_model_response": "private",
+            "openai_api_key": "sk-openai123456789",
+            "tavily_api_key": "tvly-secret",
+            "minmax_api_key": "minmax-secret",
+            "bearer_token": "bearer-secret",
+            "access_key": "access-secret",
+            "private_key": "private-secret",
+            "prompt_bundle": "private prompt bundle",
+            "system_message": "private system message",
+            "developer_message": "private developer message",
             "nested": {"path": "/Users/alice/project/private.txt"},
             "long_text": "x" * 600,
             "message": "provider key sk-testsecret123456789 leaked",
@@ -157,6 +216,15 @@ def test_redact_trace_payload_filters_sensitive_keys_values_and_long_strings() -
         "hidden_reasoning",
         "chain_of_thought",
         "raw_model_response",
+        "openai_api_key",
+        "tavily_api_key",
+        "minmax_api_key",
+        "bearer_token",
+        "access_key",
+        "private_key",
+        "prompt_bundle",
+        "system_message",
+        "developer_message",
     ):
         assert redacted[key] == "[REDACTED]"
     assert "/Users/alice/project" not in redacted["nested"]["path"]
@@ -196,6 +264,42 @@ def test_observability_adapter_records_standard_event_and_legacy_trace(tmp_path:
     assert events[0].error_signature == "ppt.render_preview:PreviewGenerationFailed:no_images"
     assert events[0].payload["api_key"] == "[REDACTED]"
     assert legacy.entries[0][0] == "tool.finished"
+
+
+def test_observability_adapter_writes_redacted_payload_to_legacy_trace(tmp_path: Path) -> None:
+    class FakeLegacyTrace:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, dict]] = []
+
+        def record(self, stage: str, payload: dict) -> None:
+            self.records.append((stage, payload))
+
+    legacy = FakeLegacyTrace()
+    store = TraceStore(tmp_path)
+    adapter = ObservabilityTraceAdapter("run_legacy_redaction", store, legacy_trace=legacy)
+
+    adapter.record(
+        "run.started",
+        {
+            "api_key": "sk-secret123456789",
+            "system_prompt": "private system prompt",
+            "hidden_reasoning": "private reasoning",
+            "message": "contains sk-secret123456789",
+        },
+    )
+
+    event_payload = store.load("run_legacy_redaction")[0].payload
+    legacy_payload = legacy.records[0][1]
+    legacy_json = json.dumps(legacy_payload, ensure_ascii=False)
+
+    assert event_payload["api_key"] == "[REDACTED]"
+    assert event_payload["system_prompt"] == "[REDACTED]"
+    assert event_payload["hidden_reasoning"] == "[REDACTED]"
+    assert "sk-secret123456789" not in event_payload["message"]
+    assert legacy_payload["api_key"] == "[REDACTED]"
+    assert "sk-secret123456789" not in legacy_json
+    assert "private system prompt" not in legacy_json
+    assert "private reasoning" not in legacy_json
 
 
 def test_observability_adapter_does_not_throw_when_legacy_or_store_fails(tmp_path: Path) -> None:

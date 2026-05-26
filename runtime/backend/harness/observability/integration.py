@@ -57,7 +57,7 @@ class ObservabilityTraceAdapter:
         original_payload = payload or {}
         safe_payload = redact_trace_payload(original_payload)
         self._record_event(stage, safe_payload)
-        self._record_legacy(stage, original_payload)
+        self._record_legacy(stage, safe_payload)
 
     def _record_event(self, stage: str, payload: dict[str, Any]) -> None:
         try:

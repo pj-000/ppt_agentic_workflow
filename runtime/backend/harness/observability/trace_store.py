@@ -65,6 +65,7 @@ class TraceStore:
                 "status": "unknown",
                 "phase_count": 0,
                 "tool_call_count": 0,
+                "tool_attempt_count": 0,
                 "failed_tool_count": 0,
                 "skipped_tool_count": 0,
                 "timeout_tool_count": 0,

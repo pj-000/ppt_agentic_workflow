@@ -17,6 +17,15 @@ SENSITIVE_KEYS = {
     "hidden_reasoning",
     "chain_of_thought",
     "raw_model_response",
+    "openai_api_key",
+    "tavily_api_key",
+    "minmax_api_key",
+    "bearer_token",
+    "access_key",
+    "private_key",
+    "prompt_bundle",
+    "system_message",
+    "developer_message",
 }
 
 _SECRET_VALUE_PATTERN = re.compile(r"\b(?:sk|gho|ghp|xoxb|AKIA|AIza)[A-Za-z0-9_\-]{8,}\b")

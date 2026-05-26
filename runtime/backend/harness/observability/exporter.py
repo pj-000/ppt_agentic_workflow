@@ -16,6 +16,7 @@ def write_trace_summary_markdown(summary: dict[str, Any], output_path: str | Pat
         f"- Total Events: {_display(summary.get('total_events'))}",
         f"- Phase Count: {_display(summary.get('phase_count'))}",
         f"- Tool Call Count: {_display(summary.get('tool_call_count'))}",
+        f"- Tool Attempt Count: {_display(summary.get('tool_attempt_count'))}",
         f"- Failed Tool Count: {_display(summary.get('failed_tool_count'))}",
         f"- Skipped Tool Count: {_display(summary.get('skipped_tool_count'))}",
         f"- Timeout Tool Count: {_display(summary.get('timeout_tool_count'))}",
