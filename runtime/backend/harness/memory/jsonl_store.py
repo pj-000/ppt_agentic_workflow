@@ -5,7 +5,12 @@ from pathlib import Path
 
 from backend.harness.memory.models import MemoryRecord, MemoryType, MemoryWriteResult
 from backend.harness.memory.namespace import namespace_to_filename, validate_namespace
-from backend.harness.memory.safety import sanitize_memory_list, sanitize_memory_mapping, sanitize_memory_text
+from backend.harness.memory.safety import (
+    sanitize_memory_artifacts,
+    sanitize_memory_list,
+    sanitize_memory_mapping,
+    sanitize_memory_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +53,16 @@ class JsonlMemoryStore:
         return records
 
     def update(self, record: MemoryRecord) -> MemoryWriteResult:
-        if self.get(record.memory_id) is None:
+        existing = self.get(record.memory_id)
+        if existing is None:
             return MemoryWriteResult(memory_id=record.memory_id, created=False, skipped=True, reason="memory not found")
+        if existing.namespace != record.namespace or existing.memory_type != record.memory_type:
+            return MemoryWriteResult(
+                memory_id=record.memory_id,
+                created=False,
+                skipped=True,
+                reason="memory namespace or type change is not supported",
+            )
         return self.write(record)
 
     def _record_path(self, namespace: str, memory_type: MemoryType) -> Path:
@@ -105,6 +118,6 @@ def _sanitize_record(record: MemoryRecord) -> MemoryRecord:
             "context": sanitize_memory_mapping(record.context),
             "outcome": sanitize_memory_mapping(record.outcome),
             "tags": sanitize_memory_list(record.tags),
-            "source_artifacts": {str(key): str(value) for key, value in record.source_artifacts.items()},
+            "source_artifacts": sanitize_memory_artifacts(record.source_artifacts),
         }
     )

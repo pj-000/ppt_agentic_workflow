@@ -19,8 +19,12 @@ def should_promote_memory(
     benchmark_passed: bool | None = None,
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
+    if record.lifecycle_state == MemoryLifecycleState.STALE:
+        reasons.append("memory is stale")
     if record.lifecycle_state == MemoryLifecycleState.RETIRED:
         reasons.append("memory is retired")
+    if record.promotion_state == MemoryPromotionState.PROMOTED:
+        reasons.append("memory already promoted")
     if record.promotion_state == MemoryPromotionState.REJECTED:
         reasons.append("memory promotion was rejected")
     if record.success_count < policy.min_success_count:

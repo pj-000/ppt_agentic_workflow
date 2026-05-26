@@ -50,6 +50,8 @@ def retrieve_memory_records(
 ) -> list[MemoryHit]:
     hits: list[MemoryHit] = []
     for record in records:
+        if record.namespace != query.namespace:
+            continue
         if record.lifecycle_state == MemoryLifecycleState.RETIRED:
             continue
         if query.memory_type is not None and record.memory_type != query.memory_type:

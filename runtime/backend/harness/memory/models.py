@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from backend.harness.memory.namespace import validate_namespace
+
 
 class MemoryType(str, Enum):
     EPISODIC = "episodic"
@@ -55,9 +57,23 @@ class MemoryRecord(BaseModel):
     @field_validator("namespace")
     @classmethod
     def _namespace_required(cls, value: str) -> str:
-        if not str(value or "").strip():
-            raise ValueError("namespace must not be empty")
-        return value
+        return validate_namespace(value)
+
+    @field_validator("memory_id")
+    @classmethod
+    def _memory_id_required(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("memory_id must not be empty")
+        return text
+
+    @field_validator("key")
+    @classmethod
+    def _key_required(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("key must not be empty")
+        return text
 
     @field_validator("confidence")
     @classmethod
@@ -84,9 +100,7 @@ class MemoryQuery(BaseModel):
     @field_validator("namespace")
     @classmethod
     def _query_namespace_required(cls, value: str) -> str:
-        if not str(value or "").strip():
-            raise ValueError("namespace must not be empty")
-        return value
+        return validate_namespace(value)
 
 
 class MemoryWriteResult(BaseModel):

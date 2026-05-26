@@ -34,9 +34,9 @@ def memory_hit_to_trace_payload(hit: MemoryHit) -> dict[str, Any]:
         "memory_id": record.memory_id,
         "namespace": record.namespace,
         "memory_type": record.memory_type.value,
-        "key": record.key,
+        "key": sanitize_memory_text(record.key, limit=200),
         "score": hit.score,
-        "reason": hit.reason,
+        "reason": sanitize_memory_text(hit.reason, limit=200),
         "content_excerpt": sanitize_memory_text(record.content, limit=100),
         "tags": list(record.tags),
     }

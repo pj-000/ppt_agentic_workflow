@@ -7,7 +7,7 @@ from typing import Any
 from backend.harness.memory.jsonl_store import JsonlMemoryStore
 from backend.harness.memory.models import MemoryHit, MemoryQuery, MemoryRecord, MemoryType, MemoryWriteResult
 from backend.harness.memory.retriever import retrieve_memory_records
-from backend.harness.memory.safety import clamp_confidence
+from backend.harness.memory.safety import clamp_confidence, sanitize_memory_mapping, sanitize_memory_text
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +20,15 @@ class AgentMemory:
     def query(self, query: MemoryQuery) -> list[MemoryHit]:
         records = self.store.list_records(namespace=query.namespace, memory_type=query.memory_type)
         hits = retrieve_memory_records(records, query)
+        safe_query_text = sanitize_memory_text(query.query, limit=200)
+        safe_context = sanitize_memory_mapping(query.context)
         self._record(
             "memory.queried",
             {
                 "namespace": query.namespace,
                 "memory_type": query.memory_type.value if query.memory_type else "",
-                "query": query.query[:200],
+                "query": safe_query_text,
+                "context": safe_context,
                 "top_k": query.top_k,
                 "hit_count": len(hits),
                 "memory_ids": [hit.record.memory_id for hit in hits],
@@ -40,7 +43,7 @@ class AgentMemory:
                     "hit_count": len(hits),
                     "memory_ids": [hit.record.memory_id for hit in hits],
                     "score": hits[0].score,
-                    "reason": hits[0].reason,
+                    "reason": sanitize_memory_text(hits[0].reason, limit=200),
                 },
             )
         return hits

@@ -126,10 +126,32 @@ def test_memory_models_serialize_and_validate() -> None:
         MemoryQuery(namespace="", query="x")
 
 
+def test_memory_record_rejects_unsafe_namespace() -> None:
+    for namespace in ("", "../secret", "/tmp/path", "bad namespace", "openai_api_key", "token:abc", "sk-secret123456789"):
+        with pytest.raises(ValueError):
+            _record(namespace=namespace)
+
+
+def test_memory_query_rejects_unsafe_namespace() -> None:
+    for namespace in ("", "../secret", "/tmp/path", "bad namespace", "openai_api_key", "token:abc", "sk-secret123456789"):
+        with pytest.raises(ValueError):
+            MemoryQuery(namespace=namespace, query="preview")
+
+
+def test_memory_record_rejects_empty_memory_id() -> None:
+    with pytest.raises(ValueError):
+        _record(memory_id=" ")
+
+
+def test_memory_record_rejects_empty_key() -> None:
+    with pytest.raises(ValueError):
+        _record(key="")
+
+
 def test_validate_namespace_accepts_and_rejects_unsafe_values() -> None:
     assert validate_namespace("planner:outline") == "planner:outline"
     assert validate_namespace("semantic/courseware") == "semantic/courseware"
-    for namespace in ("", "../secret", "/tmp/path", "bad namespace", "openai_api_key"):
+    for namespace in ("", "../secret", "/tmp/path", "bad namespace", "openai_api_key", "token:abc", "sk-secret123456789"):
         with pytest.raises(ValueError):
             validate_namespace(namespace)
 
@@ -161,6 +183,50 @@ def test_jsonl_memory_store_skips_bad_jsonl_lines(tmp_path: Path) -> None:
     assert [item.memory_id for item in records] == ["mem_1"]
 
 
+def test_jsonl_memory_store_sanitizes_source_artifact_paths(tmp_path: Path) -> None:
+    store = JsonlMemoryStore(tmp_path)
+    record = _record().model_copy(
+        update={
+            "source_artifacts": {
+                "quality_report": "/private/tmp/project/outputs/runs/run_1/quality_report.json",
+                "trace_summary": "/home/user/project/outputs/runs/run_1/trace_summary.json",
+                "preview": "C:\\Users\\me\\project\\outputs\\runs\\run_1\\preview.png",
+            }
+        }
+    )
+
+    store.write(record)
+    loaded = store.get(record.memory_id)
+    serialized = json.dumps(loaded.source_artifacts, ensure_ascii=False)
+
+    assert "/private/tmp" not in serialized
+    assert "/home/user" not in serialized
+    assert "C:\\Users" not in serialized
+    assert loaded.source_artifacts["quality_report"] == "runs/run_1/quality_report.json"
+    assert loaded.source_artifacts["trace_summary"] == "runs/run_1/trace_summary.json"
+    assert loaded.source_artifacts["preview"] == "runs/run_1/preview.png"
+
+
+def test_jsonl_memory_store_update_rejects_namespace_or_type_change(tmp_path: Path) -> None:
+    store = JsonlMemoryStore(tmp_path)
+    original = _record(memory_id="same_id")
+    changed = _record(
+        memory_id="same_id",
+        namespace=SEMANTIC_PPT_DESIGN,
+        memory_type=MemoryType.SEMANTIC,
+        key="semantic_rule",
+        content="A semantic rule",
+    )
+
+    store.write(original)
+    result = store.update(changed)
+
+    assert result.skipped is True
+    assert result.reason == "memory namespace or type change is not supported"
+    assert [record.namespace for record in store.list_records()] == [REPAIR_VISUAL]
+    assert store.list_records(namespace=SEMANTIC_PPT_DESIGN, memory_type=MemoryType.SEMANTIC) == []
+
+
 def test_retriever_scores_filters_and_ranks_records() -> None:
     strong = _record("strong", content="preview dependency soffice missing", confidence=0.9, success_count=5)
     weak = _record("weak", content="preview dependency soffice missing", confidence=0.2, failure_count=4)
@@ -173,6 +239,22 @@ def test_retriever_scores_filters_and_ranks_records() -> None:
     assert all(hit.record.lifecycle_state != MemoryLifecycleState.RETIRED for hit in hits)
     assert score_memory_record(strong, query="soffice") > score_memory_record(weak, query="soffice")
     assert retrieve_memory_records([strong], query.model_copy(update={"min_score": 99})) == []
+
+
+def test_retriever_filters_records_by_query_namespace() -> None:
+    visual = _record("visual", namespace=REPAIR_VISUAL, content="preview repair")
+    semantic = _record(
+        "semantic",
+        namespace=SEMANTIC_PPT_DESIGN,
+        memory_type=MemoryType.SEMANTIC,
+        key="preview repair",
+        content="preview repair design rule",
+    )
+    query = MemoryQuery(namespace=REPAIR_VISUAL, query="preview repair")
+
+    hits = retrieve_memory_records([semantic, visual], query)
+
+    assert [hit.record.memory_id for hit in hits] == ["visual"]
 
 
 def test_agent_memory_write_query_trace_and_update_outcome(tmp_path: Path) -> None:
@@ -196,6 +278,31 @@ def test_agent_memory_write_query_trace_and_update_outcome(tmp_path: Path) -> No
     assert updated.failure_count == 1
     assert updated.confidence > 0
     assert {"memory.written", "memory.queried", "memory.hit"}.issubset({event.event_type for event in events})
+
+
+def test_agent_memory_query_trace_sanitizes_sensitive_query(tmp_path: Path) -> None:
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, dict[str, Any]]] = []
+
+        def record(self, stage: str, payload: dict[str, Any]) -> None:
+            self.records.append((stage, payload))
+
+    trace = FakeTrace()
+    memory = AgentMemory(JsonlMemoryStore(tmp_path / "memory"), trace=trace)
+
+    memory.query(
+        MemoryQuery(
+            namespace=REPAIR_VISUAL,
+            query="api_key=sk-secret123456789 system_prompt=private",
+            context={"authorization": "Bearer sk-secret123456789", "safe": "preview"},
+        )
+    )
+    payload = json.dumps(trace.records, ensure_ascii=False)
+
+    assert "sk-secret123456789" not in payload
+    assert "system_prompt=private" not in payload
+    assert "authorization" in payload
 
 
 def test_agent_memory_trace_failure_is_best_effort(tmp_path: Path) -> None:
@@ -310,6 +417,26 @@ def test_memory_promotion_policy_reasons_and_success() -> None:
     assert should_promote_memory(_record(success_count=3, confidence=0.9), policy)[0] is True
 
 
+def test_memory_promotion_policy_rejects_stale_memory() -> None:
+    promoted, reasons = should_promote_memory(
+        _record(success_count=3, confidence=0.9, lifecycle_state=MemoryLifecycleState.STALE),
+        MemoryPromotionPolicy(),
+    )
+
+    assert promoted is False
+    assert "memory is stale" in reasons
+
+
+def test_memory_promotion_policy_rejects_already_promoted_memory() -> None:
+    promoted, reasons = should_promote_memory(
+        _record(success_count=3, confidence=0.9, promotion_state=MemoryPromotionState.PROMOTED),
+        MemoryPromotionPolicy(),
+    )
+
+    assert promoted is False
+    assert "memory already promoted" in reasons
+
+
 def test_integration_helpers_create_memory_write_episode_and_trace_payload(tmp_path: Path) -> None:
     output_root = tmp_path / "outputs"
     run_dir = output_root / "runs" / "run_1"
@@ -325,3 +452,12 @@ def test_integration_helpers_create_memory_write_episode_and_trace_payload(tmp_p
     assert payload["memory_id"] == record.memory_id
     assert "content" not in payload
     assert len(payload["content_excerpt"]) <= 115
+
+
+def test_memory_hit_to_trace_payload_sanitizes_key() -> None:
+    record = _record(key="api_key=sk-secret123456789")
+    payload = memory_hit_to_trace_payload(MemoryHit(record=record, score=0.5, reason="contains sk-secret123456789"))
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert "sk-secret123456789" not in serialized
+    assert "api_key=" not in payload["key"]
