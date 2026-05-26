@@ -116,20 +116,33 @@ def _render_preview(call: ToolCall) -> ToolResult | dict[str, Any]:
     pptx_path = str(call.input.get("pptx_path") or "")
     output_dir = str(call.input.get("output_dir") or "")
     if not Path(pptx_path).exists():
-        return _failed(call, "FileNotFoundError", "PPTX file does not exist")
+        return _failed(call, "FileNotFoundError", "PPTX file not found")
     images = pptx_skill.pptx_to_images(pptx_path, output_dir)
     if not images:
-        return _failed(call, "PreviewRenderError", "Preview rendering produced no images")
+        diagnostics = getattr(pptx_skill, "get_preview_runtime_diagnostics", lambda: {})()
+        if diagnostics.get("soffice_found") is False:
+            return _skipped(call, "DependencyMissing", "LibreOffice soffice not found")
+        if diagnostics.get("pdftoppm_found") is False:
+            return _skipped(call, "DependencyMissing", "pdftoppm not found")
+        return _failed(call, "PreviewGenerationFailed", "Preview rendering produced no images")
     return {"preview_images": list(images), "preview_count": len(images)}
 
 
 def _failed(call: ToolCall, error_type: str, message: str) -> ToolResult:
+    return _structured_result(call, "failed", error_type, message)
+
+
+def _skipped(call: ToolCall, error_type: str, message: str) -> ToolResult:
+    return _structured_result(call, "skipped", error_type, message)
+
+
+def _structured_result(call: ToolCall, status: str, error_type: str, message: str) -> ToolResult:
     safe_message = sanitize_error_message(message)
     return ToolResult(
         run_id=call.run_id,
         call_id=call.call_id,
         tool_name=call.tool_name,
-        status="failed",
+        status=status,  # type: ignore[arg-type]
         error=ToolError(
             error_type=error_type,
             message=safe_message,

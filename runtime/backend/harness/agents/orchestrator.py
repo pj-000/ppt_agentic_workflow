@@ -14,6 +14,7 @@ from backend.harness.agents.asset import AssetAgent
 from backend.harness.agents.planner import PlannerAgent
 from backend.harness.agents.research import ResearchAgent
 from backend.harness.agents.visual_eval import EvaluatorAgent
+from backend.harness.observability import ObservabilityTraceAdapter, TraceStore
 from backend.harness.quality import write_quality_report_safely
 from backend.harness.runtime import (
     HarnessRunState,
@@ -65,6 +66,12 @@ class OrchestratorAgent:
         harness_trace: HarnessTrace | None = None,
     ):
         self.harness_trace = harness_trace or HarnessTrace(run_id=f"run_{int(time.time() * 1000)}")
+        self._trace_store = TraceStore(config.OUTPUT_DIR)
+        self.observability_trace = ObservabilityTraceAdapter(
+            self.harness_trace.run_id,
+            self._trace_store,
+            legacy_trace=self.harness_trace,
+        )
         self.planner = PlannerAgent(
             model_provider=model_provider,
             thinking_callback=thinking_callback,
@@ -101,7 +108,7 @@ class OrchestratorAgent:
                 "visual_qa",
                 "finalize",
             ],
-            trace=self.harness_trace,
+            trace=self.observability_trace,
         )
 
     @cached_property
@@ -159,6 +166,16 @@ class OrchestratorAgent:
 
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         output_path = os.path.abspath(os.path.join(config.OUTPUT_DIR, output_filename))
+        self.observability_trace.record(
+            stage="run.started",
+            payload={
+                "status": "running",
+                "topic": topic,
+                "output_filename": output_filename,
+                "language": language,
+                "slide_range": {"min": min_slides, "max": max_slides},
+            },
+        )
 
         try:
             # Step 1: 规划大纲
@@ -300,6 +317,7 @@ class OrchestratorAgent:
                 content_issues=content_issues,
                 repair_events=self._last_repair_events,
                 harness_trace=self.harness_trace,
+                trace=self.observability_trace,
             )
             self._run_state.complete(
                 "finalize",
@@ -310,6 +328,18 @@ class OrchestratorAgent:
                     "quality_report_paths": quality_report_paths,
                 },
             )
+            self.observability_trace.record(
+                stage="run.finished",
+                payload={
+                    "status": "success",
+                    "artifact_refs": {
+                        "pptx_path": result_path,
+                        "quality_report_json": quality_report_paths.get("json_path", ""),
+                        "quality_report_md": quality_report_paths.get("markdown_path", ""),
+                    },
+                },
+            )
+            self._trace_store.write_summary(self.harness_trace.run_id)
 
             print(f"\n{'='*50}")
             print(f"生成完成！文件路径：{result_path}")
@@ -334,6 +364,11 @@ class OrchestratorAgent:
 
         except Exception as e:
             self._run_state.fail("finalize", error=str(e))
+            self.observability_trace.record(
+                stage="run.finished",
+                payload={"status": "failed", "error": str(e)[:300]},
+            )
+            self._trace_store.write_summary(self.harness_trace.run_id)
             print(f"\n[Orchestrator] 生成失败: {e}")
             raise
 

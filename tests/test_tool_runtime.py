@@ -270,6 +270,108 @@ def test_ppt_run_pptxgenjs_fails_when_artifact_is_empty(monkeypatch, tmp_path: P
     assert output_path.stat().st_size == 0
 
 
+def test_ppt_render_preview_classifies_missing_pptx(monkeypatch, tmp_path: Path) -> None:
+    from backend.tools import pptx_skill
+
+    called = {"value": False}
+
+    def fail_if_called(pptx_path: str, output_dir: str | None = None) -> list[str]:
+        called["value"] = True
+        return []
+
+    monkeypatch.setattr(pptx_skill, "pptx_to_images", fail_if_called)
+
+    result = asyncio.run(
+        ToolExecutor(create_default_tool_registry()).execute(
+            _call(
+                "ppt.render_preview",
+                {"pptx_path": str(tmp_path / "missing.pptx"), "output_dir": str(tmp_path / "preview")},
+            )
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.error_type == "FileNotFoundError"
+    assert result.error.error_signature == "ppt.render_preview:FileNotFoundError:pptx_file_not_found"
+    assert called["value"] is False
+
+
+def test_ppt_render_preview_classifies_missing_soffice(monkeypatch, tmp_path: Path) -> None:
+    from backend.tools import pptx_skill
+
+    pptx_path = tmp_path / "deck.pptx"
+    pptx_path.write_bytes(b"pptx marker")
+    monkeypatch.setattr(pptx_skill, "pptx_to_images", lambda pptx_path, output_dir=None: [])
+    monkeypatch.setattr(
+        pptx_skill,
+        "get_preview_runtime_diagnostics",
+        lambda: {"soffice_found": False, "pdftoppm_found": True},
+        raising=False,
+    )
+
+    result = asyncio.run(
+        ToolExecutor(create_default_tool_registry()).execute(
+            _call("ppt.render_preview", {"pptx_path": str(pptx_path), "output_dir": str(tmp_path / "preview")})
+        )
+    )
+
+    assert result.status == "skipped"
+    assert result.error is not None
+    assert result.error.error_type == "DependencyMissing"
+    assert result.error.error_signature == "ppt.render_preview:DependencyMissing:soffice_not_found"
+
+
+def test_ppt_render_preview_classifies_missing_pdftoppm(monkeypatch, tmp_path: Path) -> None:
+    from backend.tools import pptx_skill
+
+    pptx_path = tmp_path / "deck.pptx"
+    pptx_path.write_bytes(b"pptx marker")
+    monkeypatch.setattr(pptx_skill, "pptx_to_images", lambda pptx_path, output_dir=None: [])
+    monkeypatch.setattr(
+        pptx_skill,
+        "get_preview_runtime_diagnostics",
+        lambda: {"soffice_found": True, "pdftoppm_found": False},
+        raising=False,
+    )
+
+    result = asyncio.run(
+        ToolExecutor(create_default_tool_registry()).execute(
+            _call("ppt.render_preview", {"pptx_path": str(pptx_path), "output_dir": str(tmp_path / "preview")})
+        )
+    )
+
+    assert result.status == "skipped"
+    assert result.error is not None
+    assert result.error.error_type == "DependencyMissing"
+    assert result.error.error_signature == "ppt.render_preview:DependencyMissing:pdftoppm_not_found"
+
+
+def test_ppt_render_preview_classifies_no_images(monkeypatch, tmp_path: Path) -> None:
+    from backend.tools import pptx_skill
+
+    pptx_path = tmp_path / "deck.pptx"
+    pptx_path.write_bytes(b"pptx marker")
+    monkeypatch.setattr(pptx_skill, "pptx_to_images", lambda pptx_path, output_dir=None: [])
+    monkeypatch.setattr(
+        pptx_skill,
+        "get_preview_runtime_diagnostics",
+        lambda: {"soffice_found": True, "pdftoppm_found": True},
+        raising=False,
+    )
+
+    result = asyncio.run(
+        ToolExecutor(create_default_tool_registry()).execute(
+            _call("ppt.render_preview", {"pptx_path": str(pptx_path), "output_dir": str(tmp_path / "preview")})
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.error_type == "PreviewGenerationFailed"
+    assert result.error.error_signature == "ppt.render_preview:PreviewGenerationFailed:no_images"
+
+
 def test_builtin_search_document_and_eval_tools_do_not_call_external_services(monkeypatch, tmp_path: Path) -> None:
     from backend.harness.agents import document_summary
     from backend.tools import search_backend

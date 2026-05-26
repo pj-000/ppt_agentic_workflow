@@ -40,6 +40,16 @@ def _classify_reason(*, tool_name: str, error_type: str, message: str) -> str:
     error_text = str(error_type or "").lower()
     tool_text = str(tool_name or "").lower()
 
+    if "render_preview" in tool_text:
+        if "pptx file not found" in text or "pptx" in text and "not found" in text:
+            return "pptx_file_not_found"
+        if "dependencymissing" in error_text and ("libreoffice" in text or "soffice" in text):
+            return "soffice_not_found"
+        if "dependencymissing" in error_text and "pdftoppm" in text:
+            return "pdftoppm_not_found"
+        if "previewgenerationfailed" in error_text or "no images" in text:
+            return "no_images"
+
     if "timeout" in error_text or "timed out" in text or "timeout" in text:
         if "render" in tool_text or "libreoffice" in text or "soffice" in text:
             return "libreoffice_timeout"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import time
 from typing import Any
 
@@ -9,6 +10,8 @@ from backend.harness.tooling.error_signature import build_error_signature, sanit
 from backend.harness.tooling.errors import ToolInputValidationError
 from backend.harness.tooling.registry import ToolRegistry
 from backend.harness.tooling.schema import ToolCall, ToolError, ToolResult, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutor:
@@ -158,7 +161,10 @@ class ToolExecutor:
             return
         record = getattr(self.trace, "record", None)
         if callable(record):
-            record(stage=stage, payload=payload)
+            try:
+                record(stage=stage, payload=payload)
+            except Exception as exc:
+                logger.warning("[ToolRuntime] Trace recording failed; continuing tool execution: %s", exc)
 
 
 def _latency_ms(started: float) -> int:
