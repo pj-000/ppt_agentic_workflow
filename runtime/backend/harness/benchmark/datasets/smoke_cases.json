@@ -1,0 +1,63 @@
+{
+  "suite_id": "smoke",
+  "name": "Offline smoke benchmark suite",
+  "cases": [
+    {
+      "case_id": "smoke_pass_001",
+      "name": "Synthetic passing run",
+      "topic": "人工智能导论课程大纲",
+      "language": "zh-CN",
+      "audience": "undergraduate",
+      "run_id": "smoke_pass_001",
+      "expected": {
+        "min_slides": 3,
+        "max_slides": 20,
+        "min_visual_score": 3.0,
+        "max_content_issue_count": 5,
+        "require_pptx": true,
+        "require_preview": false,
+        "require_quality_report": true,
+        "require_trace_summary": true
+      },
+      "tags": ["smoke", "offline", "zh-CN"]
+    },
+    {
+      "case_id": "smoke_warning_001",
+      "name": "Synthetic trace warning run",
+      "topic": "企业战略复盘简报",
+      "language": "zh-CN",
+      "audience": "business",
+      "run_id": "smoke_warning_001",
+      "expected": {
+        "min_slides": 3,
+        "max_slides": 20,
+        "min_visual_score": 3.0,
+        "max_content_issue_count": 6,
+        "require_pptx": true,
+        "require_preview": false,
+        "require_quality_report": true,
+        "require_trace_summary": true
+      },
+      "tags": ["smoke", "offline", "warning"]
+    },
+    {
+      "case_id": "smoke_missing_001",
+      "name": "Synthetic missing artifact run",
+      "topic": "缺失产物回归样例",
+      "language": "zh-CN",
+      "audience": "maintainer",
+      "run_id": "smoke_missing_001",
+      "expected": {
+        "require_pptx": true,
+        "require_preview": false,
+        "require_quality_report": true,
+        "require_trace_summary": true
+      },
+      "tags": ["smoke", "offline", "missing-artifacts"]
+    }
+  ],
+  "metadata": {
+    "mode": "offline",
+    "notes": "Cases reference synthetic run IDs; tests create temporary artifacts."
+  }
+}
