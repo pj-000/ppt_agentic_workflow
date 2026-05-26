@@ -12,6 +12,12 @@ def write_quality_report(report: QualityReport, output_root: str | Path) -> dict
 
     json_path = run_dir / "quality_report.json"
     markdown_path = run_dir / "quality_report.md"
+    report.artifacts.update(
+        {
+            "quality_report_json": str(json_path),
+            "quality_report_markdown": str(markdown_path),
+        }
+    )
     json_path.write_text(
         json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -46,13 +52,40 @@ def render_markdown_report(report: QualityReport) -> str:
         f"- Status: {report.summary.get('status', 'unknown')}",
         f"- Visual score avg: {_display(report.run.visual_score_avg)}",
         f"- Visual score min: {_display(report.run.visual_score_min)}",
-        f"- Low-quality slides: {_display(report.summary.get('low_quality_slide_indices', []))}",
+        f"- Low-quality slides: {_display_slide_indices(report.summary.get('low_quality_slide_indices', []))}",
+        f"- Missing metric keys: {_display(report.summary.get('missing_metric_keys', []))}",
         "",
-        "## Slide-Level Table",
+        "## Artifacts",
         "",
-        "| Slide | Visual | Layout | Content | Design | Issues | Repaired | Attempts |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
     ]
+    if report.artifacts:
+        for key in sorted(report.artifacts):
+            lines.append(f"- {key}: {report.artifacts[key]}")
+    else:
+        lines.append("- No artifacts captured.")
+
+    lines.extend(
+        [
+            "",
+            "## Missing Metrics",
+            "",
+        ]
+    )
+    if report.missing_reasons:
+        for key in sorted(report.missing_reasons):
+            lines.append(f"- {key}: {report.missing_reasons[key]}")
+    else:
+        lines.append("- No missing metrics reported.")
+
+    lines.extend(
+        [
+            "",
+            "## Slide-Level Table",
+            "",
+            "| Slide | Visual | Layout | Content | Design | Issues | Repaired | Attempts |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
+        ]
+    )
 
     if report.slides:
         for slide in report.slides:
@@ -60,7 +93,7 @@ def render_markdown_report(report: QualityReport) -> str:
                 "| "
                 + " | ".join(
                     [
-                        str(slide.slide_index),
+                        str(slide.slide_index + 1),
                         _display(slide.visual_score),
                         _display(slide.layout_score),
                         _display(slide.content_score),
@@ -85,7 +118,7 @@ def render_markdown_report(report: QualityReport) -> str:
     top_issues = _rank_issues(report.issues)[:10]
     if top_issues:
         for issue in top_issues:
-            location = f"slide {issue.slide_index}" if issue.slide_index is not None else "run"
+            location = f"slide {issue.slide_index + 1}" if issue.slide_index is not None else "run"
             suggestion = f" Suggested fix: {issue.suggested_fix}" if issue.suggested_fix else ""
             lines.append(f"- [{issue.severity}] {issue.source}/{issue.issue_type} at {location}: {issue.message}{suggestion}")
     else:
@@ -104,7 +137,7 @@ def render_markdown_report(report: QualityReport) -> str:
     if repaired_slides:
         for slide in repaired_slides:
             lines.append(
-                f"- Slide {slide.slide_index}: attempts={slide.repair_attempts}, "
+                f"- Slide {slide.slide_index + 1}: attempts={slide.repair_attempts}, "
                 f"before={_display(slide.before_repair_score)}, after={_display(slide.after_repair_score)}"
             )
     else:
@@ -162,6 +195,18 @@ def _display(value: object) -> str:
     if value is None:
         return "n/a"
     return str(value)
+
+
+def _display_slide_indices(value: object) -> str:
+    if not isinstance(value, list):
+        return _display(value)
+    display_values = []
+    for item in value:
+        try:
+            display_values.append(int(item) + 1)
+        except (TypeError, ValueError):
+            display_values.append(item)
+    return str(display_values)
 
 
 def _safe_run_id(run_id: str) -> str:

@@ -12,12 +12,12 @@ from backend.harness.quality.issues import (
     normalize_visual_eval_results,
 )
 from backend.harness.quality.models import QualityIssue, QualityReport, RunQualityMetrics, SlideQualityMetrics
-from backend.harness.quality.thresholds import DEFAULT_LOW_VISUAL_SCORE, quality_status
+from backend.harness.quality.thresholds import load_low_visual_score_threshold, quality_status
 
 
 class QualityCollector:
-    def __init__(self, *, low_score_threshold: float = DEFAULT_LOW_VISUAL_SCORE) -> None:
-        self.low_score_threshold = low_score_threshold
+    def __init__(self, *, low_score_threshold: float | None = None) -> None:
+        self.low_score_threshold = load_low_visual_score_threshold() if low_score_threshold is None else low_score_threshold
 
     def collect(
         self,
@@ -32,9 +32,21 @@ class QualityCollector:
         repair_events: list[Any] | None,
         tool_errors: list[Any] | None,
         stage_latency_ms: dict[str, int] | None,
+        artifacts: dict[str, str] | None = None,
+        missing_reasons: dict[str, str] | None = None,
     ) -> QualityReport:
         normalized_preview_images = list(preview_images or [])
         normalized_stage_latency = _coerce_latency_map(stage_latency_ms)
+        normalized_missing_reasons = _coerce_str_map(missing_reasons)
+        if tool_errors is None:
+            normalized_missing_reasons.setdefault("tool_errors", "ToolRuntime not implemented yet")
+        if stage_latency_ms is None:
+            normalized_missing_reasons.setdefault("stage_latency_ms", "not available from current HarnessRunState")
+        artifact_map = _coerce_str_map(artifacts)
+        if pptx_path:
+            artifact_map.setdefault("pptx_path", str(pptx_path))
+        if normalized_preview_images:
+            artifact_map.setdefault("preview_images", f"{len(normalized_preview_images)} image(s)")
         pptx_exists = bool(pptx_path and Path(pptx_path).exists())
 
         issues: list[QualityIssue] = []
@@ -178,10 +190,18 @@ class QualityCollector:
             "error_issue_count": sum(1 for issue in issues if issue.severity == "error"),
             "warning_issue_count": sum(1 for issue in issues if issue.severity == "warning"),
             "low_quality_slide_indices": low_quality_slide_indices,
+            "missing_metric_keys": sorted(normalized_missing_reasons),
             "report_version": "quality_harness_v1",
         }
 
-        return QualityReport(run=run, slides=slides, issues=issues, summary=summary)
+        return QualityReport(
+            run=run,
+            slides=slides,
+            issues=issues,
+            artifacts=artifact_map,
+            missing_reasons=normalized_missing_reasons,
+            summary=summary,
+        )
 
 
 def _infer_slide_count(
@@ -239,6 +259,10 @@ def _coerce_latency_map(value: dict[str, int] | None) -> dict[str, int]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _coerce_str_map(value: dict[str, str] | None) -> dict[str, str]:
+    return {str(key): str(raw) for key, raw in (value or {}).items() if str(key)}
 
 
 def _coerce_slide_indices(value: Any) -> list[int]:

@@ -70,4 +70,6 @@ class QualityReport(BaseModel):
     run: RunQualityMetrics
     slides: list[SlideQualityMetrics] = Field(default_factory=list)
     issues: list[QualityIssue] = Field(default_factory=list)
+    artifacts: dict[str, str] = Field(default_factory=dict)
+    missing_reasons: dict[str, str] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)

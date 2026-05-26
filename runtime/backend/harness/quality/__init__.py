@@ -1,4 +1,5 @@
 from backend.harness.quality.collector import QualityCollector
+from backend.harness.quality.integration import write_quality_report_safely
 from backend.harness.quality.models import (
     QualityIssue,
     QualityReport,
@@ -15,4 +16,5 @@ __all__ = [
     "SlideQualityMetrics",
     "render_markdown_report",
     "write_quality_report",
+    "write_quality_report_safely",
 ]

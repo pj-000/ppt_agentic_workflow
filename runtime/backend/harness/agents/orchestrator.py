@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import cached_property
-from pathlib import Path
 from typing import Any
 
 import config
@@ -15,7 +14,7 @@ from backend.harness.agents.asset import AssetAgent
 from backend.harness.agents.planner import PlannerAgent
 from backend.harness.agents.research import ResearchAgent
 from backend.harness.agents.visual_eval import EvaluatorAgent
-from backend.harness.quality import QualityCollector, write_quality_report
+from backend.harness.quality import write_quality_report_safely
 from backend.harness.runtime import (
     HarnessRunState,
     HarnessTrace,
@@ -290,7 +289,8 @@ class OrchestratorAgent:
             if self.evaluator.enabled and preview_images:
                 visual_eval_results = self.evaluator.evaluate_all(preview_images, outline)
                 self._last_visual_eval_results = list(visual_eval_results)
-            quality_report_paths = self._write_quality_report_safely(
+            quality_report_paths = write_quality_report_safely(
+                output_root=config.OUTPUT_DIR,
                 run_id=self.harness_trace.run_id,
                 topic=topic,
                 pptx_path=result_path,
@@ -299,6 +299,7 @@ class OrchestratorAgent:
                 visual_eval_results=visual_eval_results,
                 content_issues=content_issues,
                 repair_events=self._last_repair_events,
+                harness_trace=self.harness_trace,
             )
             self._run_state.complete(
                 "finalize",
@@ -568,50 +569,6 @@ class OrchestratorAgent:
                     print("[Orchestrator] QA 最终复评通过，最后一轮修复页已达标")
 
         return output_path
-
-    def _write_quality_report_safely(
-        self,
-        *,
-        run_id: str,
-        topic: str | None,
-        pptx_path: str | None,
-        preview_images: list[str] | None,
-        extracted_text: str | None,
-        visual_eval_results: list[Any] | None,
-        content_issues: list[Any] | None,
-        repair_events: list[Any] | None,
-    ) -> dict[str, str]:
-        try:
-            report = QualityCollector().collect(
-                run_id=run_id,
-                topic=topic,
-                pptx_path=pptx_path,
-                preview_images=preview_images,
-                extracted_text=extracted_text,
-                visual_eval_results=visual_eval_results,
-                content_issues=content_issues,
-                repair_events=repair_events,
-                tool_errors=[],
-                stage_latency_ms={},
-            )
-            paths = write_quality_report(report, Path(config.OUTPUT_DIR))
-            self.harness_trace.record(
-                stage="quality_report",
-                payload={
-                    "status": report.summary.get("status"),
-                    "json_path": paths.get("json_path", ""),
-                    "markdown_path": paths.get("markdown_path", ""),
-                    "issue_count": report.summary.get("issue_count", 0),
-                },
-            )
-            return paths
-        except Exception as exc:
-            print(f"[QualityHarness] 质量报告生成失败，已跳过：{exc}")
-            self.harness_trace.record(
-                stage="quality_report",
-                payload={"status": "failed", "error": str(exc)[:300]},
-            )
-            return {}
 
     @staticmethod
     def _book_ppt_qa_profile() -> str:
