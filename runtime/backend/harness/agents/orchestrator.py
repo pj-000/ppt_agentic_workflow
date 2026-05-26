@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import cached_property
+from pathlib import Path
 from typing import Any
 
 import config
@@ -14,6 +15,7 @@ from backend.harness.agents.asset import AssetAgent
 from backend.harness.agents.planner import PlannerAgent
 from backend.harness.agents.research import ResearchAgent
 from backend.harness.agents.visual_eval import EvaluatorAgent
+from backend.harness.quality import QualityCollector, write_quality_report
 from backend.harness.runtime import (
     HarnessRunState,
     HarnessTrace,
@@ -43,6 +45,7 @@ class OrchestratorRunArtifacts:
     extracted_text: str = ""
     harness_trace: dict[str, Any] = field(default_factory=dict)
     phase_results: dict[str, Any] = field(default_factory=dict)
+    quality_report_paths: dict[str, str] = field(default_factory=dict)
 
 
 class OrchestratorAgent:
@@ -88,6 +91,8 @@ class OrchestratorAgent:
         self.debug_layout = debug_layout
         self.no_research = no_research
         self.no_images = no_images
+        self._last_repair_events: list[dict[str, Any]] = []
+        self._last_visual_eval_results: list[SlideEvalResult] = []
         self._run_state = HarnessRunState(
             [
                 "outline_planning",
@@ -284,12 +289,24 @@ class OrchestratorAgent:
             visual_eval_results = []
             if self.evaluator.enabled and preview_images:
                 visual_eval_results = self.evaluator.evaluate_all(preview_images, outline)
+                self._last_visual_eval_results = list(visual_eval_results)
+            quality_report_paths = self._write_quality_report_safely(
+                run_id=self.harness_trace.run_id,
+                topic=topic,
+                pptx_path=result_path,
+                preview_images=preview_images,
+                extracted_text=extracted_text,
+                visual_eval_results=visual_eval_results,
+                content_issues=content_issues,
+                repair_events=self._last_repair_events,
+            )
             self._run_state.complete(
                 "finalize",
                 details={
                     "preview_count": len(preview_images),
                     "visual_eval_count": len(visual_eval_results),
                     "output_path": result_path,
+                    "quality_report_paths": quality_report_paths,
                 },
             )
 
@@ -311,6 +328,7 @@ class OrchestratorAgent:
                 extracted_text=extracted_text,
                 harness_trace=self.harness_trace.to_dict(),
                 phase_results=self._run_state.export(),
+                quality_report_paths=quality_report_paths,
             )
 
         except Exception as e:
@@ -335,9 +353,10 @@ class OrchestratorAgent:
         视觉 QA 循环：转图片 → 评分 → 修复低分页 → 重新组装。
         按照 SKILL.md 要求，至少完成一轮完整的检查-修复-再验证循环。
         """
+        self._last_repair_events = []
+        self._last_visual_eval_results = []
         if not self.evaluator.enabled:
             return output_path
-
         did_fix = False
         repaired_pages_total: set[int] = set()
         repaired_pages_last_round: set[int] = set()
@@ -353,6 +372,7 @@ class OrchestratorAgent:
 
             if round_i == 1 or not eval_results:
                 eval_results = self.evaluator.evaluate_all(images, outline)
+                self._last_visual_eval_results = list(eval_results)
                 if not eval_results:
                     break
             else:
@@ -368,6 +388,7 @@ class OrchestratorAgent:
                     refreshed_by_index.get(result.slide_index, result)
                     for result in eval_results
                 ]
+                self._last_visual_eval_results = list(eval_results)
 
             hard_fail_candidates = [r for r in eval_results if self.evaluator.is_hard_fail(r)]
             strict_dimension_candidates = [
@@ -432,15 +453,15 @@ class OrchestratorAgent:
                 if idx >= len(outline.slides):
                     continue
                 slide = outline.slides[idx]
+                revision_start_payload = {
+                    "slide_index": idx,
+                    "slide_title": slide.topic,
+                    "round": round_i,
+                    "overall": float(result.overall),
+                }
+                self._last_repair_events.append({"event": "slide_revision_start", **revision_start_payload})
                 if on_revision_start:
-                    on_revision_start(
-                        {
-                            "slide_index": idx,
-                            "slide_title": slide.topic,
-                            "round": round_i,
-                            "overall": float(result.overall),
-                        }
-                    )
+                    on_revision_start(revision_start_payload)
                 research = research_results[idx] if idx < len(research_results) else None
                 prior_attempts = repair_attempts_by_page.get(idx, 0)
                 emergency_feedback = (
@@ -473,16 +494,16 @@ class OrchestratorAgent:
                         content_requirements=content_requirements,
                     )
                 except Exception as exc:
+                    revision_failed_payload = {
+                        "slide_index": idx,
+                        "slide_title": slide.topic,
+                        "round": round_i,
+                        "overall": float(result.overall),
+                        "detail": str(exc),
+                    }
+                    self._last_repair_events.append({"event": "slide_revision_failed", **revision_failed_payload})
                     if on_revision_failed:
-                        on_revision_failed(
-                            {
-                                "slide_index": idx,
-                                "slide_title": slide.topic,
-                                "round": round_i,
-                                "overall": float(result.overall),
-                                "detail": str(exc),
-                            }
-                        )
+                        on_revision_failed(revision_failed_payload)
                     print(
                         f"[Orchestrator] 第 {idx} 页视觉 QA 返修失败，"
                         f"已保留上一版页面继续生成：{str(exc)[:180]}"
@@ -496,8 +517,17 @@ class OrchestratorAgent:
 
             output_path = self.planner.assemble_pptx(slide_codes, output_path, theme)
             if current_round_repaired and on_revision_round_complete:
-                on_revision_round_complete(
+                revision_done_payload = {
+                    "round": round_i,
+                    "slide_indices": sorted(current_round_repaired),
+                    "output_path": output_path,
+                }
+                self._last_repair_events.append({"event": "slide_revision_done", **revision_done_payload})
+                on_revision_round_complete(revision_done_payload)
+            elif current_round_repaired:
+                self._last_repair_events.append(
                     {
+                        "event": "slide_revision_done",
                         "round": round_i,
                         "slide_indices": sorted(current_round_repaired),
                         "output_path": output_path,
@@ -514,6 +544,14 @@ class OrchestratorAgent:
                     outline,
                     slide_indices=sorted(repaired_pages_last_round),
                 )
+                final_by_index = {result.slide_index: result for result in final_results}
+                if self._last_visual_eval_results:
+                    self._last_visual_eval_results = [
+                        final_by_index.get(result.slide_index, result)
+                        for result in self._last_visual_eval_results
+                    ]
+                else:
+                    self._last_visual_eval_results = list(final_results)
                 remaining = [result for result in final_results if self.evaluator.needs_revision(result)]
                 if remaining:
                     remaining = self._recheck_final_borderline_results(remaining, images, outline)
@@ -530,6 +568,50 @@ class OrchestratorAgent:
                     print("[Orchestrator] QA 最终复评通过，最后一轮修复页已达标")
 
         return output_path
+
+    def _write_quality_report_safely(
+        self,
+        *,
+        run_id: str,
+        topic: str | None,
+        pptx_path: str | None,
+        preview_images: list[str] | None,
+        extracted_text: str | None,
+        visual_eval_results: list[Any] | None,
+        content_issues: list[Any] | None,
+        repair_events: list[Any] | None,
+    ) -> dict[str, str]:
+        try:
+            report = QualityCollector().collect(
+                run_id=run_id,
+                topic=topic,
+                pptx_path=pptx_path,
+                preview_images=preview_images,
+                extracted_text=extracted_text,
+                visual_eval_results=visual_eval_results,
+                content_issues=content_issues,
+                repair_events=repair_events,
+                tool_errors=[],
+                stage_latency_ms={},
+            )
+            paths = write_quality_report(report, Path(config.OUTPUT_DIR))
+            self.harness_trace.record(
+                stage="quality_report",
+                payload={
+                    "status": report.summary.get("status"),
+                    "json_path": paths.get("json_path", ""),
+                    "markdown_path": paths.get("markdown_path", ""),
+                    "issue_count": report.summary.get("issue_count", 0),
+                },
+            )
+            return paths
+        except Exception as exc:
+            print(f"[QualityHarness] 质量报告生成失败，已跳过：{exc}")
+            self.harness_trace.record(
+                stage="quality_report",
+                payload={"status": "failed", "error": str(exc)[:300]},
+            )
+            return {}
 
     @staticmethod
     def _book_ppt_qa_profile() -> str:
