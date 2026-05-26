@@ -22,6 +22,7 @@ def compare_benchmark_reports(
         baseline_benchmark_id=baseline.benchmark_id,
     )
     higher_is_better = {
+        "acceptable_success_rate",
         "end_to_end_success_rate",
         "pptx_exists_rate",
         "preview_success_rate",

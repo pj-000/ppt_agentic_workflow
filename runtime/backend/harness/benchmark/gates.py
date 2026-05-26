@@ -7,6 +7,7 @@ from backend.harness.benchmark.metrics import BenchmarkReport
 
 class BenchmarkGateThresholds(BaseModel):
     min_end_to_end_success_rate: float = 0.8
+    min_acceptable_success_rate: float | None = None
     min_pptx_exists_rate: float = 0.9
     min_preview_success_rate: float = 0.7
     min_tool_call_success_rate: float = 0.8
@@ -30,6 +31,13 @@ def evaluate_benchmark_gate(
         report.end_to_end_success_rate,
         thresholds.min_end_to_end_success_rate,
     )
+    if thresholds.min_acceptable_success_rate is not None:
+        _check_min(
+            reasons,
+            "acceptable_success_rate",
+            report.acceptable_success_rate,
+            thresholds.min_acceptable_success_rate,
+        )
     _check_min(reasons, "pptx_exists_rate", report.pptx_exists_rate, thresholds.min_pptx_exists_rate)
     _check_min(reasons, "preview_success_rate", report.preview_success_rate, thresholds.min_preview_success_rate)
     _check_min(

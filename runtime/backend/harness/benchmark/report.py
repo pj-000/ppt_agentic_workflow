@@ -48,7 +48,8 @@ def render_benchmark_markdown(report: BenchmarkReport) -> str:
         "",
         "## Core Rates",
         "",
-        f"- End-to-end Success Rate: {_display_rate(report.end_to_end_success_rate)}",
+        f"- Strict Success Rate / End-to-end Success Rate: {_display_rate(report.end_to_end_success_rate)}",
+        f"- Acceptable Success Rate: {_display_rate(report.acceptable_success_rate)}",
         f"- PPTX Exists Rate: {_display_rate(report.pptx_exists_rate)}",
         f"- Preview Success Rate: {_display_rate(report.preview_success_rate)}",
         f"- Quality Report Exists Rate: {_display_rate(report.quality_report_exists_rate)}",
@@ -93,7 +94,7 @@ def render_benchmark_markdown(report: BenchmarkReport) -> str:
 
 
 def _case_row(case: BenchmarkCaseResult) -> str:
-    reasons = "; ".join(case.reasons) if case.reasons else ""
+    reasons = "; ".join(case.reasons) if case.reasons else _fallback_reason(case)
     return (
         f"| {case.case_id} | {case.status} | {_display(case.run_id)} | {_display(case.slide_count)} | "
         f"{_display(case.visual_score_avg)} | {_display(case.visual_score_min)} | "
@@ -104,6 +105,12 @@ def _case_row(case: BenchmarkCaseResult) -> str:
 
 def _display(value: Any) -> str:
     return "n/a" if value is None else str(value)
+
+
+def _fallback_reason(case: BenchmarkCaseResult) -> str:
+    if case.status == "pass":
+        return ""
+    return f"status {case.status} without explicit reason"
 
 
 def _display_rate(value: float | None) -> str:

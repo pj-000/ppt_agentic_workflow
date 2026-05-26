@@ -55,6 +55,7 @@ class BenchmarkReport(BaseModel):
     missing_artifact_cases: int = 0
 
     end_to_end_success_rate: float | None = None
+    acceptable_success_rate: float | None = None
     pptx_exists_rate: float | None = None
     preview_success_rate: float | None = None
     quality_report_exists_rate: float | None = None
@@ -87,6 +88,8 @@ def evaluate_case_from_artifacts(
     result = BenchmarkCaseResult(case_id=case.case_id, run_id=run_id)
     quality_path = run_path / "quality_report.json"
     trace_path = run_path / "trace_summary.json"
+    quality_path_exists = quality_path.exists()
+    trace_path_exists = trace_path.exists()
     quality = _load_json(quality_path, result.reasons, "quality_report.json")
     trace = _load_json(trace_path, result.reasons, "trace_summary.json")
 
@@ -95,12 +98,13 @@ def evaluate_case_from_artifacts(
 
     if quality is not None:
         _apply_quality_report(result, quality)
-    elif case.expected.require_quality_report:
+        _evaluate_content_expectations(case, result, quality)
+    elif case.expected.require_quality_report and not quality_path_exists:
         result.reasons.append("missing quality_report.json")
 
     if trace is not None:
         _apply_trace_summary(result, trace)
-    elif case.expected.require_trace_summary:
+    elif case.expected.require_trace_summary and not trace_path_exists:
         result.reasons.append("missing trace_summary.json")
 
     result.tool_call_success_rate = _tool_success_rate(
@@ -110,6 +114,7 @@ def evaluate_case_from_artifacts(
         result.timeout_tool_count,
     )
     result.status = _classify_case(case, result)
+    _ensure_non_pass_reason(result)
     return result
 
 
@@ -142,6 +147,10 @@ def aggregate_case_results(
         skipped_cases=sum(1 for result in results if result.status == "skipped"),
         missing_artifact_cases=sum(1 for result in results if result.status == "missing_artifacts"),
         end_to_end_success_rate=_rate(sum(1 for result in results if result.status == "pass"), total),
+        acceptable_success_rate=_rate(
+            sum(1 for result in results if result.status in {"pass", "warning"}),
+            total,
+        ),
         pptx_exists_rate=_bool_rate(result.pptx_exists for result in results),
         preview_success_rate=_bool_rate(result.preview_success for result in results),
         quality_report_exists_rate=_bool_rate(result.quality_report_exists for result in results),
@@ -219,6 +228,11 @@ def _classify_case(case: BenchmarkCase, result: BenchmarkCaseResult) -> str:
     if expected.require_trace_summary and not result.trace_summary_exists:
         return "missing_artifacts"
 
+    missing_metric_reasons = _missing_required_metric_reasons(case, result)
+    if missing_metric_reasons:
+        result.reasons.extend(missing_metric_reasons)
+        return "missing_artifacts"
+
     fail_reasons = _fail_reasons(case, result)
     if fail_reasons:
         result.reasons.extend(fail_reasons)
@@ -229,6 +243,22 @@ def _classify_case(case: BenchmarkCase, result: BenchmarkCaseResult) -> str:
         result.reasons.extend(warning_reasons)
         return "warning"
     return "pass"
+
+
+def _missing_required_metric_reasons(case: BenchmarkCase, result: BenchmarkCaseResult) -> list[str]:
+    expected = case.expected
+    reasons: list[str] = []
+    if expected.require_pptx and result.pptx_exists is None:
+        reasons.append("missing required metric run.pptx_exists")
+    if expected.require_preview and result.preview_success is None:
+        reasons.append("missing required metric run.preview_success")
+    if (expected.min_slides is not None or expected.max_slides is not None) and result.slide_count is None:
+        reasons.append("missing required metric run.slide_count")
+    if expected.min_visual_score is not None and result.visual_score_min is None:
+        reasons.append("missing required metric run.visual_score_min")
+    if expected.max_content_issue_count is not None and result.content_issue_count is None:
+        reasons.append("missing required metric run.content_issue_count")
+    return reasons
 
 
 def _fail_reasons(case: BenchmarkCase, result: BenchmarkCaseResult) -> list[str]:
@@ -259,6 +289,12 @@ def _fail_reasons(case: BenchmarkCase, result: BenchmarkCaseResult) -> list[str]
         )
     if result.trace_status == "failed":
         reasons.append("trace_status failed")
+    missing_sections = result.metrics.get("missing_required_sections")
+    if isinstance(missing_sections, list):
+        reasons.extend(f"missing required_section: {section}" for section in missing_sections)
+    missing_keywords = result.metrics.get("missing_expected_keywords")
+    if isinstance(missing_keywords, list):
+        reasons.extend(f"missing expected_keyword: {keyword}" for keyword in missing_keywords)
     return reasons
 
 
@@ -280,7 +316,85 @@ def _warning_reasons(case: BenchmarkCase, result: BenchmarkCaseResult) -> list[s
     missing_reasons = result.metrics.get("missing_reasons")
     if isinstance(missing_reasons, dict) and missing_reasons:
         reasons.append("missing_reasons present")
+    if case.expected.required_sections and result.metrics.get("content_expectations_evaluated") is False:
+        reasons.append("required_sections not evaluated: no searchable text in quality_report")
+    if case.expected.expected_keywords and result.metrics.get("content_expectations_evaluated") is False:
+        reasons.append("expected_keywords not evaluated: no searchable text in quality_report")
     return reasons
+
+
+def _evaluate_content_expectations(
+    case: BenchmarkCase,
+    result: BenchmarkCaseResult,
+    quality: dict[str, Any] | None,
+) -> None:
+    required_sections = list(case.expected.required_sections)
+    expected_keywords = list(case.expected.expected_keywords)
+    if not required_sections and not expected_keywords:
+        return
+
+    searchable_text = _extract_searchable_quality_text(quality or {})
+    if not searchable_text:
+        result.metrics.update(
+            {
+                "required_section_coverage": None if required_sections else 1.0,
+                "expected_keyword_coverage": None if expected_keywords else 1.0,
+                "missing_required_sections": [],
+                "missing_expected_keywords": [],
+                "content_expectations_evaluated": False,
+            }
+        )
+        return
+
+    normalized_text = searchable_text.lower()
+    missing_sections = [section for section in required_sections if section.lower() not in normalized_text]
+    missing_keywords = [keyword for keyword in expected_keywords if keyword.lower() not in normalized_text]
+    result.metrics.update(
+        {
+            "required_section_coverage": _coverage(required_sections, missing_sections),
+            "expected_keyword_coverage": _coverage(expected_keywords, missing_keywords),
+            "missing_required_sections": missing_sections,
+            "missing_expected_keywords": missing_keywords,
+            "content_expectations_evaluated": True,
+        }
+    )
+
+
+def _extract_searchable_quality_text(quality: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    run = _mapping(quality.get("run"))
+    topic = run.get("topic")
+    if isinstance(topic, str):
+        chunks.append(topic)
+
+    _collect_text(quality.get("summary"), chunks)
+    for slide in quality.get("slides") or []:
+        if not isinstance(slide, dict):
+            continue
+        for key in ("title", "text", "content"):
+            value = slide.get(key)
+            if isinstance(value, str):
+                chunks.append(value)
+    for issue in quality.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        message = issue.get("message")
+        if isinstance(message, str):
+            chunks.append(message)
+        _collect_text(issue.get("evidence"), chunks)
+
+    return "\n".join(chunk for chunk in chunks if chunk.strip())
+
+
+def _collect_text(value: Any, chunks: list[str]) -> None:
+    if isinstance(value, str):
+        chunks.append(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _collect_text(item, chunks)
+    elif isinstance(value, list | tuple | set):
+        for item in value:
+            _collect_text(item, chunks)
 
 
 def _load_json(path: Path, reasons: list[str], label: str) -> dict[str, Any] | None:
@@ -291,7 +405,10 @@ def _load_json(path: Path, reasons: list[str], label: str) -> dict[str, Any] | N
     except json.JSONDecodeError:
         reasons.append(f"invalid {label}")
         return None
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        reasons.append(f"invalid {label}: expected object")
+        return None
+    return payload
 
 
 def _tool_success_rate(attempts: int, failed: int, skipped: int, timeout: int) -> float | None:
@@ -326,6 +443,17 @@ def _rate(count: int, total: int) -> float | None:
 
 def _round_rate(value: float) -> float:
     return round(float(value), 4)
+
+
+def _coverage(expected: list[str], missing: list[str]) -> float | None:
+    if not expected:
+        return None
+    return _round_rate((len(expected) - len(missing)) / len(expected))
+
+
+def _ensure_non_pass_reason(result: BenchmarkCaseResult) -> None:
+    if result.status != "pass" and not result.reasons:
+        result.reasons.append(f"status {result.status} without explicit reason")
 
 
 def _average(values: Any) -> float | None:
