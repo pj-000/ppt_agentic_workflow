@@ -23,7 +23,7 @@ from typing import Any, Callable, Literal, Optional
 
 from openai import OpenAI
 from pydantic import BaseModel, Field, field_validator
-import config as pptagent_config
+import config as runtime_config
 from backend.harness.runtime import (
     HarnessTrace,
     PromptComposer,
@@ -296,7 +296,7 @@ def _normalize_document_summary_payload(data: dict[str, Any]) -> dict[str, Any]:
         body = sum(int(item.get("suggested_slide_count") or 1) for item in normalized["sections"])
         normalized["ppt_generation_hints"]["suggested_total_slides"] = max(
             4,
-            min(pptagent_config.MAX_PPT_SLIDES, body + 2),
+            min(runtime_config.MAX_PPT_SLIDES, body + 2),
         )
 
     return normalized
@@ -310,7 +310,7 @@ class Metadata(BaseModel):
 
 
 class PPTGenerationHints(BaseModel):
-    suggested_total_slides: int = Field(ge=4, le=pptagent_config.MAX_PPT_SLIDES, default=8)
+    suggested_total_slides: int = Field(ge=4, le=runtime_config.MAX_PPT_SLIDES, default=8)
     audience: str = "general"
     style_preference: str = "informative"
     recommended_visual_elements: list[str] = Field(default_factory=list)
@@ -333,7 +333,7 @@ class DocumentSummary(BaseModel):
     def total_suggested_slides(self) -> int:
         """封面 + 各 section slides + closing。"""
         body = sum(s.suggested_slide_count for s in self.sections)
-        return min(body + 2, pptagent_config.MAX_PPT_SLIDES)
+        return min(body + 2, runtime_config.MAX_PPT_SLIDES)
 
     def to_planner_context(self) -> str:
         """
@@ -870,7 +870,7 @@ def summarize_document(
 
     skill_md = _load_skill()
 
-    provider_settings = pptagent_config.get_llm_provider_settings(model_provider)
+    provider_settings = runtime_config.get_llm_provider_settings(model_provider)
     client = OpenAI(
         api_key=provider_settings["api_key"],
         base_url=provider_settings["base_url"],

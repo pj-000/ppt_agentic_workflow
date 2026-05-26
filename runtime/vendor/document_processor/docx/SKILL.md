@@ -114,7 +114,7 @@ for para in doc.paragraphs:
 
 ## Integration Notes
 
-For pptagent pipeline:
+For PPT generation pipeline:
 1. Extract text paragraphs → pass to document-summarizer skill
 2. Extract tables → pass alongside text
 3. For DOCX with clear headings: preserve heading hierarchy, summarizer will map to sections

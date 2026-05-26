@@ -1,30 +1,31 @@
-import json
-import time
-import os
 import asyncio
+import json
+import os
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import cached_property
 from typing import Any
-from typing import Callable
+
+import config
 from backend.harness.agents.asset import AssetAgent
 from backend.harness.agents.planner import PlannerAgent
 from backend.harness.agents.research import ResearchAgent
 from backend.harness.agents.visual_eval import EvaluatorAgent
 from backend.harness.runtime import (
+    HarnessRunState,
     HarnessTrace,
     PromptComposer,
     PromptSection,
     RepairOrchestrator,
     SkillContext,
-    HarnessRunState,
     merge_prompt_sections,
 )
-from backend.tools.pptx_skill import read_pptx, pptx_to_images
-from backend.tools.openai_compat import build_chat_completion_kwargs, stream_chat_completion_text
-import config
 from backend.models.schemas import SlideEvalResult
+from backend.tools.openai_compat import build_chat_completion_kwargs, stream_chat_completion_text
+from backend.tools.pptx_skill import pptx_to_images, read_pptx
 
 
 @dataclass
@@ -243,7 +244,14 @@ class OrchestratorAgent:
             if content_issues:
                 print(f"[Orchestrator] 文本 QA 发现 {len(content_issues)} 个问题，修复中...")
                 result_path, slide_codes, theme = self._fix_content_issues(
-                    content_issues, slide_codes, theme, outline, research_results, image_paths, output_path
+                    content_issues,
+                    slide_codes,
+                    theme,
+                    outline,
+                    research_results,
+                    image_paths,
+                    output_path,
+                    content_requirements=content_requirements,
                 )
             self._run_state.complete(
                 "content_and_coherence_qa",
@@ -254,7 +262,13 @@ class OrchestratorAgent:
             if self.evaluator.enabled:
                 self._run_state.start("visual_qa")
             result_path = self._qa_loop(
-                result_path, slide_codes, theme, outline, research_results, image_paths
+                result_path,
+                slide_codes,
+                theme,
+                outline,
+                research_results,
+                image_paths,
+                content_requirements=content_requirements,
             )
             if self.evaluator.enabled:
                 self._run_state.complete("visual_qa", details={"enabled": True})
@@ -315,6 +329,7 @@ class OrchestratorAgent:
         on_revision_start: Callable[[dict[str, Any]], None] | None = None,
         on_revision_round_complete: Callable[[dict[str, Any]], None] | None = None,
         on_revision_failed: Callable[[dict[str, Any]], None] | None = None,
+        content_requirements: str = "",
     ) -> str:
         """
         视觉 QA 循环：转图片 → 评分 → 修复低分页 → 重新组装。
@@ -326,6 +341,7 @@ class OrchestratorAgent:
         did_fix = False
         repaired_pages_total: set[int] = set()
         repaired_pages_last_round: set[int] = set()
+        repair_attempts_by_page: dict[int, int] = {}
         eval_results = []
 
         for round_i in range(1, config.EVAL_MAX_ROUNDS + 1):
@@ -354,18 +370,29 @@ class OrchestratorAgent:
                 ]
 
             hard_fail_candidates = [r for r in eval_results if self.evaluator.is_hard_fail(r)]
+            strict_dimension_candidates = [
+                r for r in eval_results
+                if not self.evaluator.is_hard_fail(r)
+                and self.evaluator.is_strict_dimension_fail(r)
+                and self.evaluator.needs_revision(r)
+            ]
             force_issue_candidates = [
                 r for r in eval_results
                 if not self.evaluator.is_hard_fail(r)
+                and not self.evaluator.is_strict_dimension_fail(r)
                 and self.evaluator.is_force_issue_fail(r)
                 and self.evaluator.needs_revision(r)
             ]
 
-            if round_i > 1 and not hard_fail_candidates:
-                print("[Orchestrator] 已无低于硬阈值的页面，跳过后续视觉修复轮次")
+            if round_i > 1 and not hard_fail_candidates and not strict_dimension_candidates:
+                print("[Orchestrator] 已无低于硬阈值或严格单项阈值的页面，跳过后续视觉修复轮次")
                 break
 
             revision_candidates = list(hard_fail_candidates)
+            revision_candidates.extend(
+                item for item in strict_dimension_candidates
+                if item.slide_index not in {result.slide_index for result in revision_candidates}
+            )
             revision_candidates.extend(
                 item for item in force_issue_candidates
                 if item.slide_index not in {result.slide_index for result in revision_candidates}
@@ -386,9 +413,9 @@ class OrchestratorAgent:
 
             if not low_score:
                 if did_fix:
-                    print(f"[Orchestrator] QA 通过，修复后所有页评分达标")
+                    print("[Orchestrator] QA 通过，修复后所有页评分达标")
                 else:
-                    print(f"[Orchestrator] QA 首轮无低分页，所有页评分达标")
+                    print("[Orchestrator] QA 首轮无低分页，所有页评分达标")
                 break
 
             print(
@@ -415,7 +442,16 @@ class OrchestratorAgent:
                         }
                     )
                 research = research_results[idx] if idx < len(research_results) else None
+                prior_attempts = repair_attempts_by_page.get(idx, 0)
+                emergency_feedback = (
+                    self._emergency_visual_retry_feedback(result, prior_attempts=prior_attempts)
+                    if self._strict_book_ppt_qa_enabled()
+                    else []
+                )
                 img = image_paths[idx] if idx < len(image_paths) else None
+                if emergency_feedback:
+                    img = None
+                    print(f"[Orchestrator] 第 {idx} 页进入稳定重建模式：禁用图片资产，改用原生图形/文字。")
                 layout_intent = self.planner._layout_planner.plan_layout_intent(
                     slide,
                     research=research,
@@ -431,8 +467,10 @@ class OrchestratorAgent:
                         slide, theme, research, img, layout_intent,
                         prev_slides_summary=prev_summary,
                         revision_feedback=result,
+                        forced_retry_feedback=emergency_feedback,
                         trigger_stage="visual_qa",
                         audience="general",
+                        content_requirements=content_requirements,
                     )
                 except Exception as exc:
                     if on_revision_failed:
@@ -445,9 +483,14 @@ class OrchestratorAgent:
                                 "detail": str(exc),
                             }
                         )
-                    raise
+                    print(
+                        f"[Orchestrator] 第 {idx} 页视觉 QA 返修失败，"
+                        f"已保留上一版页面继续生成：{str(exc)[:180]}"
+                    )
+                    continue
                 if idx < len(slide_codes):
                     slide_codes[idx] = new_code
+                repair_attempts_by_page[idx] = prior_attempts + 1
                 repaired_pages_total.add(idx)
                 current_round_repaired.add(idx)
 
@@ -462,7 +505,146 @@ class OrchestratorAgent:
                 )
             repaired_pages_last_round = current_round_repaired
 
+        if self._strict_book_ppt_qa_enabled() and did_fix and repaired_pages_last_round:
+            print("\n[Orchestrator] QA 最终复评：检查最后一轮修复页...")
+            images = pptx_to_images(output_path)
+            if images:
+                final_results = self.evaluator.evaluate_all(
+                    images,
+                    outline,
+                    slide_indices=sorted(repaired_pages_last_round),
+                )
+                remaining = [result for result in final_results if self.evaluator.needs_revision(result)]
+                if remaining:
+                    remaining = self._recheck_final_borderline_results(remaining, images, outline)
+                if remaining:
+                    summary = ", ".join(
+                        f"第 {result.slide_index} 页 overall={result.overall:.1f}"
+                        for result in remaining
+                    )
+                    print(
+                        "[Orchestrator] QA 最终复评仍有未达标页面，"
+                        f"已降级放行当前 PPTX：{summary}"
+                    )
+                else:
+                    print("[Orchestrator] QA 最终复评通过，最后一轮修复页已达标")
+
         return output_path
+
+    @staticmethod
+    def _book_ppt_qa_profile() -> str:
+        profile = os.getenv("DIRECTIONAI_BOOK_PPT_QA_PROFILE", "").strip().lower()
+        if profile in {"balanced", "strict", "off"}:
+            return profile
+        if os.getenv("DIRECTIONAI_BOOK_PPT_STRICT_QA", "").strip().lower() in {"1", "true", "yes", "on"}:
+            return "strict"
+        return "off"
+
+    @classmethod
+    def _strict_book_ppt_qa_enabled(cls) -> bool:
+        return cls._book_ppt_qa_profile() == "strict"
+
+    def _recheck_final_borderline_results(
+        self,
+        remaining: list[SlideEvalResult],
+        images: list[str],
+        outline,
+    ) -> list[SlideEvalResult]:
+        attempts = self._final_borderline_recheck_attempts()
+        if attempts <= 0:
+            return remaining
+
+        still_remaining = list(remaining)
+        for attempt in range(1, attempts + 1):
+            candidates = [
+                result
+                for result in still_remaining
+                if self._is_final_borderline_recheck_candidate(result)
+            ]
+            if not candidates:
+                return still_remaining
+
+            indices = sorted({result.slide_index for result in candidates})
+            print(
+                "[Orchestrator] QA 最终边界页复核 "
+                f"{attempt}/{attempts}：第 {', '.join(str(i) for i in indices)} 页"
+            )
+            refreshed = self.evaluator.evaluate_all(images, outline, slide_indices=indices)
+            if not refreshed:
+                return still_remaining
+
+            refreshed_by_index = {result.slide_index: result for result in refreshed}
+            next_remaining: list[SlideEvalResult] = []
+            for result in still_remaining:
+                updated = refreshed_by_index.get(result.slide_index, result)
+                if self.evaluator.needs_revision(updated):
+                    next_remaining.append(updated)
+                else:
+                    print(
+                        "[Orchestrator] QA 最终边界页复核通过："
+                        f"第 {updated.slide_index} 页 overall={updated.overall:.1f}"
+                    )
+            still_remaining = next_remaining
+        return still_remaining
+
+    @staticmethod
+    def _final_borderline_recheck_attempts() -> int:
+        value = os.getenv("EVAL_FINAL_BORDERLINE_RECHECKS", "1")
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 1
+
+    def _is_final_borderline_recheck_candidate(self, result: SlideEvalResult) -> bool:
+        if not self._strict_book_ppt_qa_enabled():
+            return False
+        if self.evaluator.is_force_issue_fail(result):
+            return False
+
+        margin_raw = os.getenv("EVAL_FINAL_BORDERLINE_RECHECK_MARGIN", "0.25")
+        try:
+            margin = max(0.0, float(margin_raw))
+        except (TypeError, ValueError):
+            margin = 0.25
+        if result.overall < config.EVAL_SCORE_THRESHOLD - margin:
+            return False
+
+        # The most common noisy strict-QA false negative is a single layout
+        # dimension dip on an otherwise readable teacher slide. Never recheck
+        # pages whose content or design scores already miss the delivery bar.
+        return (
+            result.layout_score < self.evaluator.strict_dimension_threshold
+            and result.content_score >= config.EVAL_SCORE_THRESHOLD
+            and result.design_score >= config.EVAL_SCORE_THRESHOLD
+        )
+
+    @staticmethod
+    def _emergency_visual_retry_feedback(result: SlideEvalResult, *, prior_attempts: int) -> list[str]:
+        if prior_attempts <= 0:
+            return []
+        feedback = [
+            "同一页已经返修过但视觉 QA 仍未达标，本轮必须进入稳定重建模式，不要沿用上一版构图。",
+            "禁用 generated_image/addImage/整页图片主视觉；改用 PptxGenJS 原生 addShape/addText 绘制高对比练习板、对照表、流程图或结论卡。",
+            "如果上一版包含不可读图片、浅灰占位、文字过淡或细节噪声，必须删掉这些元素；只保留 3-5 个清晰短标签、一个明确课堂任务和充足作答留白。",
+            (
+                "本轮目标评分必须补齐低分项："
+                f"layout={result.layout_score:.1f}, content={result.content_score:.1f}, "
+                f"design={result.design_score:.1f}, overall={result.overall:.1f}。"
+            ),
+        ]
+        if result.content_score < 3.6:
+            feedback.append(
+                "本页内容单项低分，不能只做空泛总结或装饰页；必须补足 3-4 个教材原文支撑的具体概念、代码例题、边界条件或课堂判断任务。"
+            )
+        if result.layout_score < 3.6:
+            feedback.append(
+                "本页布局单项低分，必须改成清晰阅读路径：标题、主体、结论三区分明，元素对齐，减少装饰，留白充足。"
+            )
+        if result.design_score < 3.6:
+            feedback.append(
+                "本页设计单项低分，必须使用统一色板和高对比文字，避免低饱和灰字、复杂背景和无意义装饰。"
+            )
+        return feedback
 
     def _run_content_and_coherence_qa(self, pptx_path: str, outline) -> list[dict]:
         print("[Orchestrator] 文本 QA：提取 PPTX 文本内容...")
@@ -945,7 +1127,16 @@ class OrchestratorAgent:
         return self._dedupe_keep_order(suggestions)[:3]
 
     def _fix_content_issues(
-        self, content_issues, slide_codes, theme, outline, research_results, image_paths, output_path
+        self,
+        content_issues,
+        slide_codes,
+        theme,
+        outline,
+        research_results,
+        image_paths,
+        output_path,
+        *,
+        content_requirements: str = "",
     ) -> tuple[str, list[str], dict]:
         """针对文本 QA 发现的问题页重新生成。"""
         research_results = research_results or []
@@ -985,14 +1176,21 @@ class OrchestratorAgent:
             )
 
             print(f"[Orchestrator] 重新生成第 {idx} 页（文本问题）...")
-            new_code = self.planner.plan_slide(
-                slide, theme, research, img, layout_intent,
-                prev_slides_summary=prev_summary,
-                revision_feedback=feedback,
-                trigger_stage="content_qa",
-                audience="general",
-            )
-            slide_codes[idx] = new_code
+            try:
+                new_code = self.planner.plan_slide(
+                    slide, theme, research, img, layout_intent,
+                    prev_slides_summary=prev_summary,
+                    revision_feedback=feedback,
+                    trigger_stage="content_qa",
+                    audience="general",
+                    content_requirements=content_requirements,
+                )
+                slide_codes[idx] = new_code
+            except Exception as exc:
+                print(
+                    f"[Orchestrator] 第 {idx} 页文本 QA 返修失败，"
+                    f"已保留上一版页面继续生成：{str(exc)[:180]}"
+                )
 
         result_path = self.planner.assemble_pptx(slide_codes, output_path, theme)
         return result_path, slide_codes, theme

@@ -162,7 +162,7 @@ if slide.has_notes_slide:
 
 ## Integration Notes
 
-For pptagent pipeline:
+For PPT generation pipeline:
 1. Extract text from each slide → join with double newlines: `"\n\n".join(text_parts)`
 2. Extract tables → pass alongside text to summarizer
 3. Slide count serves as page count estimate: `max(1, slide_count)`

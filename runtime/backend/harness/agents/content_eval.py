@@ -80,7 +80,7 @@ LEGACY_PPT_METRIC_ALIASES = get_evaluation_metric_aliases()
 DEFAULT_PRINCIPLE_DESCRIPTIONS = get_default_principle_descriptions()
 
 BASE_DIR = Path(__file__).resolve().parents[3]
-PPT_PRINCIPLES_DIR = BASE_DIR / "re_evoagentx" / "evo_modules" / "principles" / "ppt"
+PPT_PRINCIPLES_DIR = BASE_DIR / "principles" / "ppt"
 PPT_PRINCIPLES_PATHS = {
     "zh": PPT_PRINCIPLES_DIR / "principles_zh_whiten.json",
     "en": PPT_PRINCIPLES_DIR / "principles_en_whiten.json",

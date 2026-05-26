@@ -8,7 +8,8 @@
 请优先理解并保留用户输入的原始风格和受众描述，参考标签仅用于辅助，不得覆盖原意。
 受众适配提示：
 {audience_profile}
-页数范围：{min_slides}-{max_slides}
+页数范围：{min_slides}-{max_slides}（硬约束，slides 数组长度不得低于最小值或超过最大值）
 如果页数很多，请把每页 `topic` / `objective` / `image_prompt` 写得更紧凑，优先保证完整 JSON 和非空 layout。
+如果附加要求里有“考纲要求/考纲对照”页，请优先覆盖这些考纲知识点；页数不足时可以把多个考纲知识点合并到同一个考纲对照页，但必须在 `topic` 或 `objective` 中写出被覆盖的知识点名称，不能为了逐点单独开页而超过页数范围。
 
 请先规划一份页级大纲，让后续 Research Agent 能逐页研究。{extra_requirements}

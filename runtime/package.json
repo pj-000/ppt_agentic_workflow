@@ -1,7 +1,7 @@
 {
-  "name": "pptagent",
+  "name": "directionai-ppt-runtime",
   "version": "1.0.0",
-  "description": "PPT Agent with PptxGenJS support",
+  "description": "DirectionAI embedded PPT runtime with PptxGenJS support",
   "dependencies": {
     "pptxgenjs": "^3.12.0"
   }

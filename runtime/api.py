@@ -58,22 +58,34 @@ def _load_ppt_render_concurrency() -> int:
 
 
 _PPT_PROCESS_POOL_WORKERS = _load_ppt_render_concurrency()
+_PPT_RENDER_IN_PROCESS = os.getenv("DIRECTIONAI_PPT_RENDER_IN_PROCESS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _PPT_PROCESS_POOL_LOCK = threading.Lock()
-_PPT_PROCESS_POOL = ProcessPoolExecutor(max_workers=_PPT_PROCESS_POOL_WORKERS)
+_PPT_PROCESS_POOL = None if _PPT_RENDER_IN_PROCESS else ProcessPoolExecutor(max_workers=_PPT_PROCESS_POOL_WORKERS)
 _PPT_FALLBACK_SEM = threading.Semaphore(_PPT_PROCESS_POOL_WORKERS)
 
 
 def _replace_ppt_process_pool() -> ProcessPoolExecutor:
     global _PPT_PROCESS_POOL
+    if _PPT_RENDER_IN_PROCESS:
+        raise RuntimeError("PPT render process pool is disabled")
     with _PPT_PROCESS_POOL_LOCK:
         previous = _PPT_PROCESS_POOL
         _PPT_PROCESS_POOL = ProcessPoolExecutor(max_workers=_PPT_PROCESS_POOL_WORKERS)
-    previous.shutdown(wait=False, cancel_futures=True)
+    if previous is not None:
+        previous.shutdown(wait=False, cancel_futures=True)
     return _PPT_PROCESS_POOL
 
 
 def _submit_ppt_process_job(job_name: str, timeout_seconds: int, func: Callable[..., Any], *args: Any) -> Any:
     global _PPT_PROCESS_POOL
+    if _PPT_RENDER_IN_PROCESS or _PPT_PROCESS_POOL is None:
+        with _PPT_FALLBACK_SEM:
+            return func(*args)
     try:
         future = _PPT_PROCESS_POOL.submit(func, *args)
         return future.result(timeout=timeout_seconds)
@@ -118,10 +130,15 @@ def _run_js_via_process_pool(code: str, output_path: str, timeout: int = 60) -> 
     )
 
 
-planner_module.run_js = _run_js_via_process_pool
-orchestrator_module.pptx_to_images = _pptx_to_images_via_process_pool
+planner_module.run_js = _run_js_in_process if _PPT_RENDER_IN_PROCESS else _run_js_via_process_pool
+orchestrator_module.pptx_to_images = (
+    _run_pptx_to_images_in_process if _PPT_RENDER_IN_PROCESS else _pptx_to_images_via_process_pool
+)
 
-logger.info("Initialized PPT render process pool with %s workers", _PPT_PROCESS_POOL_WORKERS)
+if _PPT_RENDER_IN_PROCESS:
+    logger.info("Initialized PPT render in-process mode")
+else:
+    logger.info("Initialized PPT render process pool with %s workers", _PPT_PROCESS_POOL_WORKERS)
 
 
 def _install_ppt_render_guard(orchestrator: OrchestratorAgent) -> OrchestratorAgent:
@@ -194,7 +211,7 @@ class PPTGenerationRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     topic: str | None = Field(default=None, description="PPT 主题")
-    model_provider: Literal["minmax", "claude"] = Field(default="minmax", description="模型供应商")
+    model_provider: Literal["minmax", "claude", "qwen", "deepseek"] = Field(default="minmax", description="模型供应商")
     output_language: str = Field(default="中文", description="输出语言")
     target_audience: str = Field(default="general", description="目标受众")
 
@@ -517,6 +534,35 @@ def _build_raw_document_context(documents: list[UploadDocumentItem], limit_per_d
     return "\n\n".join(blocks)
 
 
+def _book_ppt_direct_document_context_enabled() -> bool:
+    return os.getenv("DIRECTIONAI_BOOK_PPT_DIRECT_DOCUMENT_CONTEXT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _book_ppt_direct_document_context_limit() -> int:
+    try:
+        value = int(os.getenv("DIRECTIONAI_BOOK_PPT_DIRECT_DOCUMENT_CONTEXT_CHARS", "60000"))
+    except ValueError:
+        return 60000
+    return max(12000, min(120000, value))
+
+
+def _build_book_ppt_direct_document_context(documents: list[UploadDocumentItem]) -> str:
+    return (
+        "【电子书课时原文直读模式】\n"
+        "本任务已经由 Phase1/Phase2 完成目录、页码和课时规划。"
+        "不要再用通用摘要替代原文，请直接依据以下当前课时原文和 content 中的 toc_index/lesson_plan 约束规划大纲。\n\n"
+        + _build_raw_document_context(
+            documents,
+            limit_per_document=_book_ppt_direct_document_context_limit(),
+        )
+    )
+
+
 def _merge_document_summaries(
     documents: list[UploadDocumentItem],
     summaries: list[DocumentSummary | None],
@@ -622,7 +668,7 @@ def _merge_document_summaries(
 def _build_document_context(
     documents: list[UploadDocumentItem],
     *,
-    model_provider: Literal["minmax", "claude"],
+    model_provider: Literal["minmax", "claude", "qwen", "deepseek"],
     harness_trace: HarnessTrace,
     thinking_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, list[dict[str, Any] | None], DocumentSummary | None]:
@@ -656,6 +702,28 @@ def _build_document_context(
 
     combined_summary = _merge_document_summaries(documents, summary_models)
     return "\n\n".join(context_blocks), summary_payloads, combined_summary
+
+
+def _merge_content_requirements_with_document_context(content_requirements: str, document_context: str) -> str:
+    """Keep user/task requirements visible when uploaded documents are summarized.
+
+    The document summarizer produces a compact source summary for outline planning,
+    but callers may also pass important generation constraints in content/constraint.
+    For book PPT generation this includes lesson_plan order, toc_index descriptions,
+    page ranges, style continuity, and evidence rules. These constraints must stay
+    in the outline prompt instead of being replaced by the document summary.
+    """
+
+    content_requirements = str(content_requirements or "").strip()
+    document_context = str(document_context or "").strip()
+    if content_requirements and document_context:
+        return (
+            "## 生成任务与约束\n"
+            f"{content_requirements}\n\n"
+            "## 当前文档理解摘要\n"
+            f"{document_context}"
+        )
+    return content_requirements or document_context
 
 
 def _build_preview_markdown(
@@ -1032,13 +1100,21 @@ def generate_ppt_bundle(
                 (f"正在阅读上传的 {len(documents)} 份文档，提炼章节结构和核心要点，为 PPT 大纲规划做准备。"),
             )
             try:
-                document_context, _, combined_summary = _build_document_context(
-                    documents,
-                    model_provider=req.model_provider,
-                    harness_trace=orchestrator.harness_trace,
-                    thinking_callback=emit_reasoning,
+                if _book_ppt_direct_document_context_enabled():
+                    document_context = _build_book_ppt_direct_document_context(documents)
+                    combined_summary = None
+                    emit_safe_thinking("电子书课件已跳过通用文档摘要，直接使用当前课时原文、目录索引和课时规划来生成大纲。")
+                else:
+                    document_context, _, combined_summary = _build_document_context(
+                        documents,
+                        model_provider=req.model_provider,
+                        harness_trace=orchestrator.harness_trace,
+                        thinking_callback=emit_reasoning,
+                    )
+                content_requirements = _merge_content_requirements_with_document_context(
+                    content_requirements,
+                    document_context,
                 )
-                content_requirements = document_context
                 if combined_summary:
                     emit_safe_thinking(f"文档解析完成，已整合 {len(documents)} 份文档，共识别 {len(combined_summary.sections)} 个主题章节，建议生成约 {combined_summary.ppt_generation_hints.suggested_total_slides} 页 PPT。")
 
@@ -1053,7 +1129,10 @@ def generate_ppt_bundle(
 
             except Exception as exc:
                 logging.getLogger(__name__).warning(f"[generate_ppt_bundle] 文档摘要失败: {exc}，降级为直接使用原始文本")
-                content_requirements = f"【文档内容摘要失败，降级处理】\n\n{_build_raw_document_context(documents)}"
+                content_requirements = _merge_content_requirements_with_document_context(
+                    content_requirements,
+                    f"【文档内容摘要失败，降级处理】\n\n{_build_raw_document_context(documents)}",
+                )
             end_step(1, "理解文档内容")
             current_step = 2
         else:
@@ -1280,6 +1359,7 @@ def generate_ppt_bundle(
                 research_results,
                 image_paths,
                 output_path,
+                content_requirements=req.content or req.constraint or "",
             )
         result_path = orchestrator._qa_loop(
             result_path,
@@ -1288,6 +1368,7 @@ def generate_ppt_bundle(
             outline,
             research_results,
             image_paths,
+            content_requirements=req.content or req.constraint or "",
         )
         final_markdown = read_pptx(result_path).strip() or _build_preview_markdown(
             outline,
@@ -1441,6 +1522,7 @@ def _emit_stage_status(
 
 def _make_search_action_event(search_event: dict[str, Any], slide_index: int) -> dict[str, Any]:
     topic = str(search_event.get("topic") or "")
+    query = str(search_event.get("query") or topic)
     raw_slide_index = search_event.get("slide_index")
     if isinstance(raw_slide_index, int):
         slide_index = raw_slide_index
@@ -1453,7 +1535,7 @@ def _make_search_action_event(search_event: dict[str, Any], slide_index: int) ->
     return {
         "slide_index": slide_index,
         "slide_title": topic,
-        "query": topic,
+        "query": query,
         "status": status,
         "result_count": snippet_count,
         "message": message,
@@ -1545,13 +1627,21 @@ def _plan_outline_bundle(
                 f"正在阅读上传的 {len(documents)} 份文档，提炼章节结构和重点，为大纲规划做准备。",
             )
             try:
-                document_context, _, combined_summary = _build_document_context(
-                    documents,
-                    model_provider=req.model_provider,
-                    harness_trace=orchestrator.harness_trace,
-                    thinking_callback=emit_reasoning,
+                if _book_ppt_direct_document_context_enabled():
+                    document_context = _build_book_ppt_direct_document_context(documents)
+                    combined_summary = None
+                    emit_safe_thinking("电子书课件已跳过通用文档摘要，直接使用当前课时原文、目录索引和课时规划来生成大纲。")
+                else:
+                    document_context, _, combined_summary = _build_document_context(
+                        documents,
+                        model_provider=req.model_provider,
+                        harness_trace=orchestrator.harness_trace,
+                        thinking_callback=emit_reasoning,
+                    )
+                content_requirements = _merge_content_requirements_with_document_context(
+                    content_requirements,
+                    document_context,
                 )
-                content_requirements = document_context
                 if combined_summary:
                     emit_safe_thinking(f"文档解析完成，已整合 {len(documents)} 份文档，共识别 {len(combined_summary.sections)} 个主题章节，建议生成约 {combined_summary.ppt_generation_hints.suggested_total_slides} 页 PPT。")
                     suggested = combined_summary.ppt_generation_hints.suggested_total_slides
@@ -1562,7 +1652,10 @@ def _plan_outline_bundle(
                         req.target_audience = combined_summary.ppt_generation_hints.audience
             except Exception as exc:
                 logging.getLogger(__name__).warning(f"[_plan_outline_bundle] 文档摘要失败: {exc}，降级为直接使用原始文本")
-                content_requirements = f"【文档内容摘要失败，降级处理】\n\n{_build_raw_document_context(documents)}"
+                content_requirements = _merge_content_requirements_with_document_context(
+                    content_requirements,
+                    f"【文档内容摘要失败，降级处理】\n\n{_build_raw_document_context(documents)}",
+                )
             end_step(1, "理解文档内容")
             _raise_if_cancelled(cancel_event)
             _emit_stage_status(
@@ -1937,6 +2030,7 @@ def _generate_from_outline_bundle(
                 research_results,
                 image_paths,
                 output_path,
+                content_requirements=req.content or req.constraint or "",
             )
 
         def handle_revision_start(payload: dict[str, Any]) -> None:
@@ -2022,6 +2116,7 @@ def _generate_from_outline_bundle(
             on_revision_start=handle_revision_start,
             on_revision_round_complete=handle_revision_round_complete,
             on_revision_failed=handle_revision_failed,
+            content_requirements=req.content or req.constraint or "",
         )
         _raise_if_cancelled(cancel_event)
         final_markdown = read_pptx(result_path).strip() or _build_preview_markdown(

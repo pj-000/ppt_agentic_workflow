@@ -1,6 +1,6 @@
 import os
-import json
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,10 +34,22 @@ def _normalize_openai_base_url(url: str) -> str:
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "minimax-m2.7-highspeed"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_QWEN_MODEL = "qwen3.6-plus"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_BASE_URL = _normalize_openai_base_url(os.getenv("MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL))
 MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL)
+
+QWEN_API_KEY = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY", "")
+QWEN_BASE_URL = _normalize_openai_base_url(os.getenv("QWEN_BASE_URL", DEFAULT_QWEN_BASE_URL))
+QWEN_MODEL = os.getenv("QWEN_MODEL", DEFAULT_QWEN_MODEL)
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = _normalize_openai_base_url(os.getenv("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL))
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL)
 
 OPENROUTER_API_KEY = os.getenv(
     "OPENROUTER_API_KEY",
@@ -62,6 +74,7 @@ PLANNER_API_KEY = os.getenv("PLANNER_API_KEY", MINIMAX_API_KEY or GLM_API_KEY)
 PLANNER_BASE_URL = _normalize_openai_base_url(os.getenv("PLANNER_BASE_URL", GLM_BASE_URL))
 PLANNER_MODEL = os.getenv("PLANNER_MODEL", MINIMAX_MODEL)
 MAX_TOKENS_PLANNER = 32768
+PLANNER_REQUEST_TIMEOUT = float(os.getenv("PLANNER_REQUEST_TIMEOUT", "300"))
 
 # Research Agent (Tavily)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
@@ -81,6 +94,26 @@ MAX_TOKENS_RESEARCHER = 4096
 
 def get_llm_provider_settings(provider: str | None) -> dict[str, str]:
     normalized = (provider or "minmax").strip().lower()
+
+    if normalized in {"qwen", "dashscope", "qwen3.6-plus"}:
+        return {
+            "provider": "qwen",
+            "provider_id": "qwen",
+            "api_key": QWEN_API_KEY or PLANNER_API_KEY,
+            "base_url": QWEN_BASE_URL or PLANNER_BASE_URL,
+            "model": QWEN_MODEL,
+            "model_id": QWEN_MODEL,
+        }
+
+    if normalized in {"deepseek", "deepseek-v4-pro"}:
+        return {
+            "provider": "deepseek",
+            "provider_id": "deepseek",
+            "api_key": DEEPSEEK_API_KEY or PLANNER_API_KEY,
+            "base_url": DEEPSEEK_BASE_URL or PLANNER_BASE_URL,
+            "model": DEEPSEEK_MODEL,
+            "model_id": DEEPSEEK_MODEL,
+        }
 
     if normalized == "claude":
         return {
@@ -106,10 +139,7 @@ SLIDE_WIDTH_INCH = 13.333
 SLIDE_HEIGHT_INCH = 7.5
 MAX_PPT_SLIDES = int(os.getenv("MAX_PPT_SLIDES", "60"))
 
-OUTPUT_DIR = os.getenv(
-    "PPT_OUTPUT_DIR",
-    os.getenv("DIRECTIONAI_PPT_OUTPUT_DIR", str(WORKSPACE_DIR / "outputs")),
-)
+OUTPUT_DIR = str(WORKSPACE_DIR / "outputs")
 ASSETS_DIR = str(WORKSPACE_DIR / "assets")
 
 # Unsplash
@@ -129,8 +159,21 @@ DOUBAO_IMAGE_MODEL = os.getenv("DOUBAO_IMAGE_MODEL", "doubao-seedream-4-5-251128
 DOUBAO_IMAGE_SIZE = os.getenv("DOUBAO_IMAGE_SIZE", "2K")
 
 # Qwen-VL 视觉评估
-QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
-QWEN_BASE_URL = _normalize_openai_base_url(os.getenv("QWEN_BASE_URL", ""))
+_BOOK_GENERATION_QWEN_FALLBACK = os.getenv("DIRECTIONAI_BOOK_GENERATION_QWEN_FALLBACK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+QWEN_VL_API_KEY = os.getenv("QWEN_VL_API_KEY") or QWEN_API_KEY
+if not QWEN_VL_API_KEY and _BOOK_GENERATION_QWEN_FALLBACK:
+    QWEN_VL_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+QWEN_VL_BASE_URL = _normalize_openai_base_url(
+    os.getenv(
+        "QWEN_VL_BASE_URL",
+        DEFAULT_QWEN_BASE_URL if _BOOK_GENERATION_QWEN_FALLBACK else "",
+    )
+)
 QWEN_VL_MODEL = os.getenv("QWEN_VL_MODEL", "qwen-vl-max")
 EVAL_SCORE_THRESHOLD = float(os.getenv("EVAL_SCORE_THRESHOLD", "3.0"))
 EVAL_MAX_ROUNDS = int(os.getenv("EVAL_MAX_ROUNDS", "2"))

@@ -11,17 +11,17 @@ import base64
 import hashlib
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
 from urllib.parse import urlparse
 
-import httpx
-
 import config
+import httpx
 from backend.harness.runtime import HarnessTrace, PromptComposer, RepairOrchestrator, SkillContext, SkillRuntime
 from backend.models.schemas import SlideLayout, SlideOutline, VisualMode, resolve_visual_mode
 from backend.tools.search_backend import SearchBackend
+from backend.tools.usage_recorder import record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -258,13 +258,13 @@ class AssetAgent:
         slides: list[SlideOutline],
         job_id: str,
         concurrency: int = 3,
-    ) -> list[Optional[str]]:
+    ) -> list[str | None]:
         asset_dir = Path(config.ASSETS_DIR) / job_id
         asset_dir.mkdir(parents=True, exist_ok=True)
 
         sem = asyncio.Semaphore(concurrency)
 
-        async def _bounded(slide: SlideOutline) -> Optional[str]:
+        async def _bounded(slide: SlideOutline) -> str | None:
             async with sem:
                 return await self._fetch_for_slide(slide, asset_dir)
 
@@ -282,7 +282,7 @@ class AssetAgent:
         print(f"[AssetAgent] 完成，{fetched}/{len(slides)} 页获取到图片（模式: {self.image_source}）")
         return processed
 
-    async def _fetch_for_slide(self, slide: SlideOutline, asset_dir: Path) -> Optional[str]:
+    async def _fetch_for_slide(self, slide: SlideOutline, asset_dir: Path) -> str | None:
         if slide.layout in SKIP_LAYOUTS:
             return None
 
@@ -342,7 +342,7 @@ class AssetAgent:
             )
         return generated
 
-    async def _try_search(self, slide, asset_dir, cache_key, query) -> tuple[Optional[str], SearchAttemptResult]:
+    async def _try_search(self, slide, asset_dir, cache_key, query) -> tuple[str | None, SearchAttemptResult]:
         search_attempt = await self._search_image(query)
         if search_attempt.image_url:
             local_path = asset_dir / f"{cache_key}.jpg"
@@ -351,7 +351,7 @@ class AssetAgent:
                 return str(local_path), search_attempt
         return None, search_attempt
 
-    async def _try_generate(self, slide, asset_dir, cache_key) -> Optional[str]:
+    async def _try_generate(self, slide, asset_dir, cache_key) -> str | None:
         local_path = asset_dir / f"{cache_key}_gen.png"
         prompt = self._make_image_prompt(slide.topic, slide.image_prompt)
         if await self._generate_image(prompt, local_path):
@@ -438,7 +438,18 @@ class AssetAgent:
                 response_format="url",
             )
             url = response.data[0].url
-            return await self._download(url, output_path)
+            ok = await self._download(url, output_path)
+            if ok:
+                record_usage(
+                    component="ppt_asset_generation",
+                    operation="doubao_image_generate",
+                    provider=config.ARK_BASE_URL,
+                    model=config.DOUBAO_IMAGE_MODEL,
+                    image_count=1,
+                    generated_image_count=1,
+                    metadata={"size": config.DOUBAO_IMAGE_SIZE},
+                )
+            return ok
         except Exception as e:
             logger.warning(f"[AssetAgent] 豆包生成失败: {e}")
         return False
@@ -485,6 +496,19 @@ class AssetAgent:
             }
             ok, error = await self._attempt_minimax_payload(payload, output_path)
             if ok:
+                record_usage(
+                    component="ppt_asset_generation",
+                    operation="minimax_image_generate",
+                    provider=config.MINIMAX_IMAGE_BASE_URL,
+                    model=config.MINIMAX_IMAGE_MODEL,
+                    image_count=1,
+                    generated_image_count=1,
+                    metadata={
+                        "response_format": response_format,
+                        "prompt_optimizer": prompt_optimizer,
+                        "aspect_ratio": config.MINIMAX_IMAGE_ASPECT_RATIO,
+                    },
+                )
                 if last_error_signature:
                     repair_instruction = self._repair_orchestrator.build_repair_instruction(
                         error_signature=last_error_signature,
@@ -563,6 +587,6 @@ class AssetAgent:
             logger.warning(f"[AssetAgent] 下载异常: {e}")
         return False
 
-    def _make_image_prompt(self, topic: str, image_prompt: Optional[str] = None) -> str:
+    def _make_image_prompt(self, topic: str, image_prompt: str | None = None) -> str:
         base = image_prompt.strip() if image_prompt else topic
         return self._image_prompt_template.replace("{base}", base)

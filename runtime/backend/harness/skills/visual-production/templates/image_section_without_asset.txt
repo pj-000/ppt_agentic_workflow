@@ -2,3 +2,4 @@
 本页没有可用图片资产。禁止 addImage，禁止任何远程图片 URL、base64/data URI、preencoded 占位图、临时 PNG/SVG。
 你仍然需要自己做“插图感”视觉元素，但必须使用 addChart / addShape / addText 组合出稳定图表或示意图。
 优先参考第 9 页那种正常视觉：图表、卡片、公式框、色块分区，而不是伪图片。
+不要写 `http://`、`https://`、`imageUrl`、`src`、`url` 或任何网络图片占位；如果你想要图片感，改画成原生卡片、流程图、代码框、表格或对照图。
