@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 
 DEFAULT_LOW_VISUAL_SCORE = 3.5
+
+
+def load_low_visual_score_threshold(default: float = DEFAULT_LOW_VISUAL_SCORE) -> float:
+    raw = os.getenv("PPT_QUALITY_LOW_VISUAL_SCORE") or os.getenv("QUALITY_LOW_VISUAL_SCORE")
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def severity_for_score(score: float | None, *, low_score_threshold: float = DEFAULT_LOW_VISUAL_SCORE) -> Literal["info", "warning", "error"]:

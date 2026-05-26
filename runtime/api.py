@@ -29,7 +29,7 @@ from backend.harness.agents.document_summary import (
     summarize_document,
 )
 from backend.harness.agents.orchestrator import OrchestratorAgent
-from backend.harness.quality import QualityCollector, write_quality_report
+from backend.harness.quality import write_quality_report_safely
 from backend.harness.runtime import (
     HarnessTrace,
     get_learned_skill_registry,
@@ -368,55 +368,6 @@ def _write_harness_trace(output_filename: str, output_path: str, harness_trace: 
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     trace_path.write_text(json.dumps(harness_trace, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return str(trace_path)
-
-
-def _write_quality_report_safely(
-    *,
-    run_id: str,
-    topic: str | None,
-    pptx_path: str | None,
-    preview_images: list[str] | None,
-    extracted_text: str | None,
-    visual_eval_results: list[Any] | None,
-    content_issues: list[Any] | None,
-    repair_events: list[Any] | None,
-    tool_errors: list[Any] | None = None,
-    stage_latency_ms: dict[str, int] | None = None,
-    harness_trace: HarnessTrace | None = None,
-) -> dict[str, str]:
-    try:
-        report = QualityCollector().collect(
-            run_id=run_id,
-            topic=topic,
-            pptx_path=pptx_path,
-            preview_images=preview_images,
-            extracted_text=extracted_text,
-            visual_eval_results=visual_eval_results,
-            content_issues=content_issues,
-            repair_events=repair_events,
-            tool_errors=tool_errors,
-            stage_latency_ms=stage_latency_ms,
-        )
-        paths = write_quality_report(report, OUTPUT_ROOT)
-        if harness_trace:
-            harness_trace.record(
-                stage="quality_report",
-                payload={
-                    "status": report.summary.get("status"),
-                    "json_path": paths.get("json_path", ""),
-                    "markdown_path": paths.get("markdown_path", ""),
-                    "issue_count": report.summary.get("issue_count", 0),
-                },
-            )
-        return paths
-    except Exception as exc:
-        logger.warning("[QualityHarness] Failed to write quality report; continuing generation: %s", exc)
-        if harness_trace:
-            harness_trace.record(
-                stage="quality_report",
-                payload={"status": "failed", "error": str(exc)[:300]},
-            )
-        return {}
 
 
 def _preview_image_sort_key(path: Path) -> tuple[int, str]:
@@ -1432,7 +1383,8 @@ def generate_ppt_bundle(
             preview_images,
             visual_qa_enabled=orchestrator.evaluator.enabled,
         )
-        _write_quality_report_safely(
+        write_quality_report_safely(
+            output_root=OUTPUT_ROOT,
             run_id=orchestrator.harness_trace.run_id,
             topic=req.topic,
             pptx_path=result_path,
@@ -2192,7 +2144,8 @@ def _generate_from_outline_bundle(
             preview_images,
             visual_qa_enabled=orchestrator.evaluator.enabled,
         )
-        _write_quality_report_safely(
+        write_quality_report_safely(
+            output_root=OUTPUT_ROOT,
             run_id=orchestrator.harness_trace.run_id,
             topic=outline.topic or req.topic,
             pptx_path=result_path,

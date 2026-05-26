@@ -8,7 +8,13 @@ RUNTIME = ROOT / "runtime"
 if str(RUNTIME) not in sys.path:
     sys.path.insert(0, str(RUNTIME))
 
-from backend.harness.quality import QualityCollector, QualityIssue, QualityReport, write_quality_report  # noqa: E402
+from backend.harness.quality import (  # noqa: E402
+    QualityCollector,
+    QualityIssue,
+    QualityReport,
+    write_quality_report,
+    write_quality_report_safely,
+)
 from backend.harness.quality.models import RunQualityMetrics, SlideQualityMetrics  # noqa: E402
 
 
@@ -51,12 +57,27 @@ def test_quality_report_schema_round_trips_json() -> None:
         stage_latency_ms={},
         created_at="2026-05-26T00:00:00+00:00",
     )
-    report = QualityReport(run=run, slides=[slide], issues=[issue], summary={"status": "warning"})
+    report = QualityReport(
+        run=run,
+        slides=[slide],
+        issues=[issue],
+        artifacts={"pptx_path": "/tmp/example.pptx"},
+        missing_reasons={"stage_latency_ms": "not available from current HarnessRunState"},
+        summary={
+            "status": "warning",
+            "issue_count": 1,
+            "critical_issue_count": 0,
+            "low_quality_slide_indices": [0],
+            "missing_metric_keys": ["stage_latency_ms"],
+        },
+    )
 
     loaded = QualityReport.model_validate_json(report.model_dump_json())
 
     assert loaded.run.run_id == "run_schema"
     assert loaded.slides[0].issues[0].source == "content_qa"
+    assert loaded.artifacts["pptx_path"] == "/tmp/example.pptx"
+    assert loaded.missing_reasons["stage_latency_ms"] == "not available from current HarnessRunState"
 
 
 def test_collector_is_null_safe_for_missing_artifacts() -> None:
@@ -78,7 +99,10 @@ def test_collector_is_null_safe_for_missing_artifacts() -> None:
     assert report.run.preview_image_count == 0
     assert report.run.slide_count is None
     assert report.run.stage_latency_ms == {}
+    assert report.missing_reasons["tool_errors"] == "ToolRuntime not implemented yet"
+    assert report.missing_reasons["stage_latency_ms"] == "not available from current HarnessRunState"
     assert report.summary["status"] == "critical"
+    assert report.summary["missing_metric_keys"] == ["stage_latency_ms", "tool_errors"]
     assert report.issues[0].source == "pptx_parse"
 
 
@@ -130,8 +154,13 @@ def test_collector_writes_json_and_markdown_reports(tmp_path: Path) -> None:
     assert loaded.slides[0].before_repair_score == 3.0
     assert loaded.slides[0].after_repair_score == 3.0
     assert loaded.run.total_latency_ms == 42
+    assert loaded.artifacts["pptx_path"] == str(pptx_path)
+    assert "quality_report_json" in loaded.artifacts
+    assert loaded.missing_reasons == {}
     assert markdown_path.exists()
-    assert "## Slide-Level Table" in markdown_path.read_text(encoding="utf-8")
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "## Slide-Level Table" in markdown
+    assert "| 1 | 3.0 |" in markdown
 
 
 def test_tool_error_evidence_is_json_safe(tmp_path: Path) -> None:
@@ -153,3 +182,55 @@ def test_tool_error_evidence_is_json_safe(tmp_path: Path) -> None:
 
     tool_issue = next(issue for issue in loaded.issues if issue.source == "tool")
     assert tool_issue.evidence["error"] == "renderer failed"
+
+
+def test_integration_helper_writes_reports_with_missing_reasons(tmp_path: Path) -> None:
+    paths = write_quality_report_safely(
+        output_root=tmp_path,
+        run_id="run_integration_missing",
+        topic="integration smoke",
+        pptx_path=None,
+        preview_images=None,
+        extracted_text=None,
+        visual_eval_results=None,
+        content_issues=None,
+        repair_events=None,
+    )
+
+    json_path = Path(paths["json_path"])
+    markdown_path = Path(paths["markdown_path"])
+    loaded = QualityReport.model_validate_json(json_path.read_text(encoding="utf-8"))
+
+    assert json_path.exists()
+    assert markdown_path.exists()
+    assert loaded.missing_reasons["tool_errors"] == "ToolRuntime not implemented yet"
+    assert loaded.missing_reasons["stage_latency_ms"] == "not available from current HarnessRunState"
+    assert loaded.summary["missing_metric_keys"] == ["stage_latency_ms", "tool_errors"]
+
+
+def test_low_visual_score_threshold_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("PPT_QUALITY_LOW_VISUAL_SCORE", "4.2")
+
+    report = QualityCollector().collect(
+        run_id="run_threshold",
+        topic="threshold",
+        pptx_path=None,
+        preview_images=None,
+        extracted_text=None,
+        visual_eval_results=[
+            {
+                "slide_index": 0,
+                "overall": 4.0,
+                "layout_score": 4.0,
+                "content_score": 4.0,
+                "design_score": 4.0,
+            }
+        ],
+        content_issues=None,
+        repair_events=None,
+        tool_errors=None,
+        stage_latency_ms=None,
+    )
+
+    assert report.summary["low_score_threshold"] == 4.2
+    assert report.summary["low_quality_slide_indices"] == [0]

@@ -97,6 +97,8 @@ Fields:
 run: RunQualityMetrics
 slides: list[SlideQualityMetrics]
 issues: list[QualityIssue]
+artifacts: dict[str, str]
+missing_reasons: dict[str, str]
 summary: dict[str, Any]
 ```
 
@@ -119,11 +121,32 @@ class QualityCollector:
         repair_events: list[Any] | None,
         tool_errors: list[Any] | None,
         stage_latency_ms: dict[str, int] | None,
+        artifacts: dict[str, str] | None = None,
+        missing_reasons: dict[str, str] | None = None,
     ) -> QualityReport:
         ...
 ```
 
-If a field is missing, fill `None`, `False`, `0`, or `[]`. Do not fail the generation run because quality collection is incomplete.
+If a value is missing, fill `None`, `False`, `0`, or `[]` for the metric value and add the reason to `missing_reasons`. Do not fail the generation run because quality collection is incomplete.
+
+The live finalization hook must not pass placeholder empty values as if they were collected. Until ToolRuntime and stage latency collection are implemented, report at least:
+
+```python
+missing_reasons = {
+    "tool_errors": "ToolRuntime not implemented yet",
+    "stage_latency_ms": "not available from current HarnessRunState",
+}
+```
+
+`summary` must always include:
+
+```python
+status: str
+issue_count: int
+critical_issue_count: int
+low_quality_slide_indices: list[int]
+missing_metric_keys: list[str]
+```
 
 ## Output files
 
@@ -138,11 +161,13 @@ The markdown report should include:
 
 1. Run summary.
 2. Overall quality status.
-3. Slide-level table.
-4. Top quality issues.
-5. Repair summary.
-6. Tool errors.
-7. Suggested next debugging steps.
+3. Artifacts.
+4. Missing metrics.
+5. Slide-level table.
+6. Top quality issues.
+7. Repair summary.
+8. Tool errors.
+9. Suggested next debugging steps.
 
 ## Integration points
 
