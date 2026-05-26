@@ -90,10 +90,13 @@ def _run_pptxgenjs(call: ToolCall) -> ToolResult | dict[str, Any]:
     path = Path(pptx_path)
     if not path.exists():
         return _failed(call, "PptxArtifactMissing", "PptxGenJS completed but did not create the PPTX file")
+    file_size = path.stat().st_size
+    if file_size <= 0:
+        return _failed(call, "PptxArtifactEmpty", "PptxGenJS created an empty PPTX file")
     return {
         "pptx_path": str(path),
         "exists": True,
-        "file_size": path.stat().st_size,
+        "file_size": file_size,
     }
 
 

@@ -239,6 +239,37 @@ def test_ppt_run_pptxgenjs_fails_when_artifact_is_missing(monkeypatch, tmp_path:
     assert output_path.exists() is False
 
 
+def test_ppt_run_pptxgenjs_fails_when_artifact_is_empty(monkeypatch, tmp_path: Path) -> None:
+    from backend.tools import pptx_skill
+
+    output_path = tmp_path / "empty.pptx"
+
+    def fake_run_js(code: str, output_path: str, timeout: int = 60) -> str:
+        Path(output_path).write_bytes(b"")
+        return output_path
+
+    monkeypatch.setattr(pptx_skill, "run_js", fake_run_js)
+
+    registry = create_default_tool_registry()
+    executor = ToolExecutor(registry)
+
+    result = asyncio.run(
+        executor.execute(
+            _call(
+                "ppt.run_pptxgenjs",
+                {"code": "pptx.writeFile()", "output_path": str(output_path), "timeout_s": 5},
+            )
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.error_type == "PptxArtifactEmpty"
+    assert result.error.error_signature.startswith("ppt.run_pptxgenjs:PptxArtifactEmpty:")
+    assert output_path.exists() is True
+    assert output_path.stat().st_size == 0
+
+
 def test_builtin_search_document_and_eval_tools_do_not_call_external_services(monkeypatch, tmp_path: Path) -> None:
     from backend.harness.agents import document_summary
     from backend.tools import search_backend
