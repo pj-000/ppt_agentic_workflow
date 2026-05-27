@@ -9,15 +9,21 @@ def simulate_replan_decision(
     *,
     plan: PlanGraph,
     decision: ReplanDecision,
-    allow_auto_apply: bool = False,
+    apply_auto_patches: bool = True,
+    force_apply_all_low_risk: bool = False,
     allow_high_risk: bool = False,
 ) -> PlanGraph:
     simulated = plan.model_copy(deep=True)
     simulated_records = []
     for patch in decision.patches:
-        should_apply = patch.auto_apply or allow_auto_apply
+        should_apply = False
+        if apply_auto_patches and patch.auto_apply:
+            should_apply = True
+        if force_apply_all_low_risk and patch.risk_level == PatchRiskLevel.LOW:
+            should_apply = True
+        if patch.risk_level == PatchRiskLevel.HIGH:
+            should_apply = bool(allow_high_risk and force_apply_all_low_risk)
         if patch.risk_level == PatchRiskLevel.HIGH and not allow_high_risk:
-            should_apply = False
             reason = "high_risk_not_allowed"
         elif not should_apply:
             reason = "auto_apply_false"

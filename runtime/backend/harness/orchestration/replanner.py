@@ -39,15 +39,22 @@ class DeterministicReplanner:
     ) -> ReplanDecision:
         patches: list[PlanPatch] = []
         inserted_count = 0
+        dedupe_keys: set[tuple[Any, ...]] = set()
+        deduped_patch_count = 0
 
         def add_patch(patch: PlanPatch) -> None:
-            nonlocal inserted_count
+            nonlocal deduped_patch_count, inserted_count
+            dedupe_key = _patch_dedupe_key(patch)
+            if dedupe_key in dedupe_keys:
+                deduped_patch_count += 1
+                return
             if len(patches) >= self.policy.max_patches:
                 return
             if patch.action == PlanPatchAction.INSERT_STEP:
                 if inserted_count + len(patch.new_steps) > self.policy.max_inserted_steps:
                     return
                 inserted_count += len(patch.new_steps)
+            dedupe_keys.add(dedupe_key)
             patches.append(patch)
 
         signatures = " ".join(signals.error_signatures)
@@ -156,7 +163,11 @@ class DeterministicReplanner:
                 )
             )
 
-        if signals.repair_plan_exists and signals.repair_action_count > 0 and not signals.repair_result_exists:
+        if (
+            signals.repair_plan_exists
+            and signals.repair_auto_executable_action_count > 0
+            and not signals.repair_result_exists
+        ):
             add_patch(
                 self._insert_patch(
                     plan,
@@ -165,8 +176,31 @@ class DeterministicReplanner:
                     reason="Repair plan exists; schedule low-risk repair execution review.",
                     risk=PatchRiskLevel.MEDIUM,
                     target_step_type=PlanStepType.FINALIZE,
-                    evidence={"repair_action_count": signals.repair_action_count},
+                    evidence={
+                        "repair_action_count": signals.repair_action_count,
+                        "repair_auto_executable_action_count": signals.repair_auto_executable_action_count,
+                    },
                     suffix="repair_execution",
+                )
+            )
+        elif signals.repair_plan_exists and signals.repair_action_count > 0 and not signals.repair_result_exists:
+            add_patch(
+                self._insert_patch(
+                    plan,
+                    signals,
+                    step_type=PlanStepType.MANUAL_REVIEW,
+                    reason=(
+                        "Repair plan contains only non-auto-executable actions; "
+                        "schedule manual review instead of repair execution."
+                    ),
+                    risk=PatchRiskLevel.LOW,
+                    target_step_type=PlanStepType.FINALIZE,
+                    evidence={
+                        "repair_action_count": signals.repair_action_count,
+                        "repair_auto_executable_action_count": signals.repair_auto_executable_action_count,
+                        "repair_non_auto_action_count": signals.repair_non_auto_action_count,
+                    },
+                    suffix="repair_manual_review",
                 )
             )
 
@@ -205,6 +239,21 @@ class DeterministicReplanner:
                 )
             )
 
+        has_specific_signal = bool(signals.error_signatures or patches)
+        if signals.trace_status == "failed" and not has_specific_signal and self.policy.allow_manual_review:
+            add_patch(
+                self._insert_patch(
+                    plan,
+                    signals,
+                    step_type=PlanStepType.MANUAL_REVIEW,
+                    reason="Trace summary indicates failed run but no specific deterministic repair signal was found.",
+                    risk=PatchRiskLevel.LOW,
+                    target_step_type=PlanStepType.FINALIZE,
+                    evidence={"trace_status": signals.trace_status},
+                    suffix="trace_failed",
+                )
+            )
+
         status = "patch_proposed" if patches else "no_change"
         summary = (
             f"Proposed {len(patches)} deterministic patch(es)."
@@ -226,7 +275,7 @@ class DeterministicReplanner:
                 "error_signature_count": len(signals.error_signatures),
             },
             created_at=utc_now_iso(),
-            metadata=_risk_breakdown(patches),
+            metadata=summarize_patches(patches, deduped_patch_count=deduped_patch_count),
         )
         self._record_trace(decision)
         return decision
@@ -276,6 +325,9 @@ class DeterministicReplanner:
         if risk == PatchRiskLevel.HIGH:
             auto_apply = False
         target_step_id = _find_step_id(plan, target_step_type)
+        safe_metadata = dict(metadata or {})
+        if action != PlanPatchAction.INSERT_STEP and target_step_id is None:
+            safe_metadata["target_step_missing"] = True
         return PlanPatch(
             patch_id=stable_orchestration_id("patch", plan.plan_id, action.value, reason, target_step_id, len(plan.steps)),
             run_id=signals.run_id,
@@ -286,7 +338,7 @@ class DeterministicReplanner:
             target_step_id=target_step_id,
             new_steps=new_steps or [],
             evidence=evidence,
-            metadata=metadata or {},
+            metadata=safe_metadata,
         )
 
     def _record_trace(self, decision: ReplanDecision) -> None:
@@ -301,7 +353,10 @@ class DeterministicReplanner:
             "status": decision.status,
             "patch_count": len(decision.patches),
             "summary": decision.summary,
-            **_risk_breakdown(decision.patches),
+            **summarize_patches(
+                decision.patches,
+                deduped_patch_count=int(decision.metadata.get("deduped_patch_count") or 0),
+            ),
         }
         try:
             record(stage="replan.triggered", payload=sanitize_orchestration_mapping(payload))
@@ -322,9 +377,34 @@ def _find_step_id(plan: PlanGraph, step_type: PlanStepType) -> str | None:
 
 
 def _risk_breakdown(patches: list[PlanPatch]) -> dict[str, Any]:
+    return summarize_patches(patches)
+
+
+def summarize_patches(patches: list[PlanPatch], *, deduped_patch_count: int = 0) -> dict[str, Any]:
     return {
+        "patch_count": len(patches),
         "low_risk_patch_count": sum(1 for patch in patches if patch.risk_level == PatchRiskLevel.LOW),
         "medium_risk_patch_count": sum(1 for patch in patches if patch.risk_level == PatchRiskLevel.MEDIUM),
         "high_risk_patch_count": sum(1 for patch in patches if patch.risk_level == PatchRiskLevel.HIGH),
         "auto_apply_patch_count": sum(1 for patch in patches if patch.auto_apply),
+        "insert_step_count": sum(1 for patch in patches if patch.action == PlanPatchAction.INSERT_STEP),
+        "skip_step_count": sum(1 for patch in patches if patch.action == PlanPatchAction.SKIP_STEP),
+        "update_step_count": sum(1 for patch in patches if patch.action == PlanPatchAction.UPDATE_STEP),
+        "manual_review_patch_count": sum(
+            1
+            for patch in patches
+            if any(step.step_type == PlanStepType.MANUAL_REVIEW for step in patch.new_steps)
+        ),
+        "deduped_patch_count": deduped_patch_count,
     }
+
+
+def _patch_dedupe_key(patch: PlanPatch) -> tuple[Any, ...]:
+    step_key = tuple(
+        (
+            step.step_type.value,
+            str(step.metadata.get("suffix") or ""),
+        )
+        for step in patch.new_steps
+    )
+    return (patch.action.value, patch.target_step_id or "", step_key)

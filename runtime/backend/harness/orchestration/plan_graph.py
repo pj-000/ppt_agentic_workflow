@@ -117,6 +117,9 @@ def apply_plan_patch(plan: PlanGraph, patch: PlanPatch, *, allow_high_risk: bool
         return _with_patch_history(plan, patch, applied=False, reason="auto_apply_false")
     if patch.risk_level == PatchRiskLevel.HIGH and not allow_high_risk:
         return _with_patch_history(plan, patch, applied=False, reason="high_risk_not_allowed")
+    target_check = _target_check_failure(plan, patch)
+    if target_check:
+        return _with_patch_history(plan, patch, applied=False, reason=target_check)
 
     updated = plan.model_copy(deep=True)
     try:
@@ -171,12 +174,23 @@ def _step(
 
 
 def make_replan_step(run_id: str, step_type: PlanStepType, reason: str, *, suffix: str = "") -> PlanStep:
-    return _step(
+    step = _step(
         run_id,
         step_type,
         step_type.value.replace("_", " ").title(),
         success_criteria=[reason],
         metadata={"replanned": True, "reason": reason, "suffix": suffix},
+    )
+    return step.model_copy(
+        update={
+            "step_id": stable_orchestration_id(
+                "step",
+                run_id,
+                step_type.value,
+                suffix,
+                reason,
+            )
+        }
     )
 
 
@@ -195,6 +209,30 @@ def _insert_steps(steps: list[PlanStep], patch: PlanPatch) -> list[PlanStep]:
     if not inserted:
         result.extend(patch.new_steps)
     return result
+
+
+def _target_check_failure(plan: PlanGraph, patch: PlanPatch) -> str | None:
+    target_required = {
+        PlanPatchAction.SKIP_STEP,
+        PlanPatchAction.REPEAT_STEP,
+        PlanPatchAction.REPLACE_STEP,
+        PlanPatchAction.UPDATE_STEP,
+        PlanPatchAction.ANNOTATE_STEP,
+    }
+    if patch.action in target_required:
+        if not patch.target_step_id:
+            return "target_step_id_missing"
+        if not _step_exists(plan, patch.target_step_id):
+            return "target_step_not_found"
+    if patch.action == PlanPatchAction.STOP and patch.target_step_id and not _step_exists(plan, patch.target_step_id):
+        return "target_step_not_found"
+    return None
+
+
+def _step_exists(plan: PlanGraph, step_id: str | None) -> bool:
+    if not step_id:
+        return False
+    return any(step.step_id == step_id for step in plan.steps)
 
 
 def _repeat_step(steps: list[PlanStep], patch: PlanPatch) -> list[PlanStep]:

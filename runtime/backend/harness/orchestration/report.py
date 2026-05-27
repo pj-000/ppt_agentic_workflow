@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.harness.orchestration.models import PatchRiskLevel, PlanGraph, ReplanDecision
+from backend.harness.orchestration.signals import RunSignals
 from backend.harness.orchestration.safety import (
     sanitize_orchestration_artifacts,
     sanitize_orchestration_text,
@@ -43,12 +44,17 @@ def write_replan_report_markdown(
     plan: PlanGraph,
     decision: ReplanDecision,
     output_path: str | Path,
+    signals: RunSignals | None = None,
 ) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     low = sum(1 for patch in decision.patches if patch.risk_level == PatchRiskLevel.LOW)
     medium = sum(1 for patch in decision.patches if patch.risk_level == PatchRiskLevel.MEDIUM)
     high = sum(1 for patch in decision.patches if patch.risk_level == PatchRiskLevel.HIGH)
+    insert_step_count = int(decision.metadata.get("insert_step_count") or 0)
+    skip_step_count = int(decision.metadata.get("skip_step_count") or 0)
+    manual_review_patch_count = int(decision.metadata.get("manual_review_patch_count") or 0)
+    deduped_patch_count = int(decision.metadata.get("deduped_patch_count") or 0)
     lines = [
         "# Replan Report",
         "",
@@ -59,6 +65,10 @@ def write_replan_report_markdown(
         f"- Low Risk Patch Count: {low}",
         f"- Medium Risk Patch Count: {medium}",
         f"- High Risk Patch Count: {high}",
+        f"- Insert Step Count: {insert_step_count}",
+        f"- Skip Step Count: {skip_step_count}",
+        f"- Manual Review Patch Count: {manual_review_patch_count}",
+        f"- Deduped Patch Count: {deduped_patch_count}",
         "",
         "## Current Plan",
         "",
@@ -100,6 +110,24 @@ def write_replan_report_markdown(
             )
     else:
         lines.append("(none)")
+
+    if signals is not None:
+        lines.extend(
+            [
+                "",
+                "## Run Signals",
+                "",
+                f"- pptx_exists: `{_cell(signals.pptx_exists)}`",
+                f"- preview_success: `{_cell(signals.preview_success)}`",
+                f"- visual_score_min: `{_cell(signals.visual_score_min)}`",
+                f"- content_issue_count: `{_cell(signals.content_issue_count)}`",
+                f"- failed_tool_count: `{signals.failed_tool_count}`",
+                f"- skipped_tool_count: `{signals.skipped_tool_count}`",
+                f"- timeout_tool_count: `{signals.timeout_tool_count}`",
+                f"- repair_action_count: `{signals.repair_action_count}`",
+                f"- repair_auto_executable_action_count: `{signals.repair_auto_executable_action_count}`",
+            ]
+        )
 
     lines.extend(["", "## Evidence", ""])
     if decision.evidence:

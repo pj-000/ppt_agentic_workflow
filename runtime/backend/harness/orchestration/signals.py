@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from backend.harness.orchestration.safety import (
     sanitize_orchestration_artifacts,
     sanitize_orchestration_mapping,
+    sanitize_orchestration_path,
     sanitize_orchestration_text,
 )
 
@@ -35,6 +36,8 @@ class RunSignals(BaseModel):
 
     repair_issue_count: int = 0
     repair_action_count: int = 0
+    repair_auto_executable_action_count: int = 0
+    repair_non_auto_action_count: int = 0
     repair_attempt_count: int = 0
     repair_success_rate: float | None = None
 
@@ -85,15 +88,22 @@ def extract_run_signals_from_artifacts(
     repair_plan, repair_plan_error = _load_json_object(path / "repair_plan.json")
     repair_result, repair_result_error = _load_json_object(path / "repair_result.json")
 
-    for name, loaded, error in (
-        ("quality_report.json", quality, quality_error),
-        ("trace_summary.json", trace, trace_error),
-        ("repair_plan.json", repair_plan, repair_plan_error),
-        ("repair_result.json", repair_result, repair_result_error),
+    optional_missing_artifacts: list[str] = []
+    invalid_optional_artifacts: dict[str, str] = {}
+    for name, loaded, error, required in (
+        ("quality_report.json", quality, quality_error, True),
+        ("trace_summary.json", trace, trace_error, True),
+        ("repair_plan.json", repair_plan, repair_plan_error, False),
+        ("repair_result.json", repair_result, repair_result_error, False),
     ):
         if loaded is None:
-            missing_artifacts.append(name)
-            if error:
+            if required:
+                missing_artifacts.append(name)
+            elif error and error.startswith("missing "):
+                optional_missing_artifacts.append(name)
+            elif error:
+                invalid_optional_artifacts[name] = error
+            if error and required:
                 missing_reasons[name] = error
         else:
             artifact_refs[name] = str(path / name)
@@ -103,6 +113,8 @@ def extract_run_signals_from_artifacts(
     trace_artifacts = _dict_value(trace, "artifact_refs")
     repair_plan_actions = repair_plan.get("actions", []) if isinstance(repair_plan, dict) else []
     repair_plan_issues = repair_plan.get("issues", []) if isinstance(repair_plan, dict) else []
+    repair_auto_executable_action_count = _repair_auto_executable_action_count(repair_plan_actions)
+    repair_action_count = len(repair_plan_actions) if isinstance(repair_plan_actions, list) else 0
     repair_result_metadata = _dict_value(repair_result, "metadata")
 
     missing_reasons.update({str(key): str(value) for key, value in quality_missing.items()})
@@ -125,13 +137,20 @@ def extract_run_signals_from_artifacts(
         timeout_tool_count=_optional_int(trace.get("timeout_tool_count") if isinstance(trace, dict) else None) or 0,
         error_signatures=trace.get("error_signatures", []) if isinstance(trace, dict) else [],
         repair_issue_count=len(repair_plan_issues) if isinstance(repair_plan_issues, list) else 0,
-        repair_action_count=len(repair_plan_actions) if isinstance(repair_plan_actions, list) else 0,
+        repair_action_count=repair_action_count,
+        repair_auto_executable_action_count=repair_auto_executable_action_count,
+        repair_non_auto_action_count=max(repair_action_count - repair_auto_executable_action_count, 0),
         repair_attempt_count=_repair_attempt_count(repair_result, repair_result_metadata),
         repair_success_rate=_optional_float(repair_result_metadata.get("repair_success_rate")),
         missing_artifacts=missing_artifacts,
         missing_reasons=missing_reasons,
         artifact_refs=artifact_refs,
-        metadata={"run_dir": str(path), "repair_result_status": repair_result.get("status") if isinstance(repair_result, dict) else ""},
+        metadata={
+            "run_dir": sanitize_orchestration_path(path),
+            "repair_result_status": repair_result.get("status") if isinstance(repair_result, dict) else "",
+            "optional_missing_artifacts": optional_missing_artifacts,
+            "invalid_optional_artifacts": invalid_optional_artifacts,
+        },
     )
 
 
@@ -160,6 +179,24 @@ def _repair_attempt_count(repair_result: dict[str, Any] | None, metadata: dict[s
         return count
     attempts = repair_result.get("attempts", []) if isinstance(repair_result, dict) else []
     return len(attempts) if isinstance(attempts, list) else 0
+
+
+def _repair_auto_executable_action_count(actions: Any) -> int:
+    if not isinstance(actions, list):
+        return 0
+    count = 0
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        action_type = str(action.get("action_type") or "")
+        metadata = action.get("metadata", {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        if metadata.get("auto_execute") is False:
+            continue
+        if action_type in {"no_op", "manual_review"}:
+            continue
+        count += 1
+    return count
 
 
 def _optional_bool(value: Any) -> bool | None:

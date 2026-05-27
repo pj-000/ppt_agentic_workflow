@@ -32,6 +32,7 @@ from backend.harness.orchestration import (  # noqa: E402
     write_replan_decision,
 )
 from backend.harness.orchestration.models import stable_orchestration_id, utc_now_iso  # noqa: E402
+from backend.harness.orchestration.plan_graph import make_replan_step  # noqa: E402
 from backend.harness.orchestration.report import write_replan_report_markdown  # noqa: E402
 
 
@@ -113,7 +114,12 @@ def _trace_summary() -> dict[str, Any]:
 
 
 def _repair_plan() -> dict[str, Any]:
-    return {"run_id": "run_1", "plan_id": "repair_1", "issues": [{"issue_id": "i1"}], "actions": [{"action_id": "a1"}]}
+    return {
+        "run_id": "run_1",
+        "plan_id": "repair_1",
+        "issues": [{"issue_id": "i1"}],
+        "actions": [{"action_id": "a1", "action_type": "rerender_preview", "metadata": {"auto_execute": True}}],
+    }
 
 
 def _repair_result(status: str = "partial") -> dict[str, Any]:
@@ -173,6 +179,44 @@ def test_build_default_plan_and_apply_patches() -> None:
     assert not_applied.metadata["patch_history"][0]["reason"] == "auto_apply_false"
 
 
+def test_make_replan_step_generates_unique_ids_for_same_step_type() -> None:
+    step_a = make_replan_step("run1", PlanStepType.REPAIR_PLANNING, "visual issue", suffix="visual")
+    step_b = make_replan_step("run1", PlanStepType.REPAIR_PLANNING, "content issue", suffix="content")
+
+    assert step_a.step_id != step_b.step_id
+
+
+def test_apply_skip_patch_with_missing_target_is_not_applied() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    patch = _patch(PlanPatchAction.SKIP_STEP, target_step_id=None)
+
+    updated = apply_plan_patch(plan, patch)
+
+    assert updated.metadata["patch_history"][0]["applied"] is False
+    assert updated.metadata["patch_history"][0]["reason"] == "target_step_id_missing"
+
+
+def test_apply_update_patch_with_unknown_target_is_not_applied() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    patch = _patch(PlanPatchAction.UPDATE_STEP, target_step_id="missing_step")
+
+    updated = apply_plan_patch(plan, patch)
+
+    assert updated.metadata["patch_history"][0]["applied"] is False
+    assert updated.metadata["patch_history"][0]["reason"] == "target_step_not_found"
+
+
+def test_apply_insert_patch_without_target_appends() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    patch = _patch(target_step_id=None, new_steps=[_step(PlanStepType.TOOL_RETRY)])
+
+    updated = apply_plan_patch(plan, patch)
+
+    assert len(updated.steps) == len(plan.steps) + 1
+    assert updated.steps[-1].step_type == PlanStepType.TOOL_RETRY
+    assert updated.metadata["patch_history"][0]["applied"] is True
+
+
 def test_extract_run_signals_from_artifacts(tmp_path: Path) -> None:
     run_dir = tmp_path / "outputs" / "runs" / "run_1"
     run_dir.mkdir(parents=True)
@@ -197,10 +241,41 @@ def test_extract_run_signals_from_artifacts(tmp_path: Path) -> None:
     assert signals.timeout_tool_count == 1
     assert signals.repair_issue_count == 1
     assert signals.repair_action_count == 1
+    assert signals.repair_auto_executable_action_count == 1
+    assert signals.repair_non_auto_action_count == 0
     assert signals.repair_attempt_count == 2
     assert signals.repair_success_rate == 0.5
     assert "/private/tmp" not in serialized_refs
     assert "runs/run_1/quality_report.json" in serialized_refs
+
+
+def test_extract_run_signals_does_not_treat_missing_repair_artifacts_as_core_missing(tmp_path: Path) -> None:
+    run_dir = tmp_path / "outputs" / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "quality_report.json").write_text(json.dumps(_quality_report(), ensure_ascii=False), encoding="utf-8")
+    (run_dir / "trace_summary.json").write_text(json.dumps(_trace_summary(), ensure_ascii=False), encoding="utf-8")
+
+    signals = extract_run_signals_from_artifacts(run_id="run_1", run_dir=run_dir)
+
+    assert "repair_plan.json" not in signals.missing_artifacts
+    assert "repair_result.json" not in signals.missing_artifacts
+    assert "repair_plan.json" in signals.metadata["optional_missing_artifacts"]
+    assert "repair_result.json" in signals.metadata["optional_missing_artifacts"]
+
+
+def test_extract_run_signals_sanitizes_run_dir_metadata(tmp_path: Path) -> None:
+    run_dir = tmp_path / "private" / "tmp" / "project" / "outputs" / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "quality_report.json").write_text(json.dumps(_quality_report(), ensure_ascii=False), encoding="utf-8")
+    (run_dir / "trace_summary.json").write_text(json.dumps(_trace_summary(), ensure_ascii=False), encoding="utf-8")
+
+    signals = extract_run_signals_from_artifacts(run_id="run_1", run_dir=run_dir)
+    serialized = json.dumps(signals.metadata, ensure_ascii=False)
+
+    assert "/private/tmp" not in serialized
+    assert "/home/" not in serialized
+    assert "/Users/" not in serialized
+    assert "run_1" in serialized
 
 
 def test_extract_run_signals_handles_missing_and_invalid_json(tmp_path: Path) -> None:
@@ -229,6 +304,7 @@ def test_replanner_proposes_patches_for_core_failure_signals() -> None:
         repair_plan_exists=True,
         repair_result_exists=False,
         repair_action_count=2,
+        repair_auto_executable_action_count=2,
         error_signatures=[
             "ppt.run_pptxgenjs:PptxArtifactEmpty:empty_file",
             "ppt.render_preview:PreviewGenerationFailed:no_images",
@@ -269,6 +345,96 @@ def test_replanner_dependency_missing_skips_visual_qa() -> None:
     assert patch.auto_apply is False
 
 
+def test_replanner_marks_patch_when_target_step_missing() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    plan = plan.model_copy(update={"steps": [step for step in plan.steps if step.step_type != PlanStepType.VISUAL_QA]})
+    signals = _signals(error_signatures=["ppt.render_preview:DependencyMissing:soffice_not_found"])
+
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+    patch = next(patch for patch in decision.patches if patch.action == PlanPatchAction.SKIP_STEP)
+
+    assert patch.target_step_id is None
+    assert patch.metadata["target_step_missing"] is True
+
+
+def test_replanner_repair_plan_with_auto_executable_actions_schedules_repair_execution() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    signals = _signals(
+        repair_plan_exists=True,
+        repair_result_exists=False,
+        repair_action_count=2,
+        repair_auto_executable_action_count=1,
+        repair_non_auto_action_count=1,
+    )
+
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+    inserted_types = [step.step_type for patch in decision.patches for step in patch.new_steps]
+
+    assert PlanStepType.REPAIR_EXECUTION in inserted_types
+    assert PlanStepType.MANUAL_REVIEW not in inserted_types
+
+
+def test_replanner_repair_plan_with_only_non_auto_actions_schedules_manual_review() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    signals = _signals(
+        repair_plan_exists=True,
+        repair_result_exists=False,
+        repair_action_count=2,
+        repair_auto_executable_action_count=0,
+        repair_non_auto_action_count=2,
+    )
+
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+    inserted_types = [step.step_type for patch in decision.patches for step in patch.new_steps]
+    reasons = " ".join(patch.reason for patch in decision.patches)
+
+    assert PlanStepType.MANUAL_REVIEW in inserted_types
+    assert PlanStepType.REPAIR_EXECUTION not in inserted_types
+    assert "non-auto-executable" in reasons
+
+
+def test_replanner_dedupes_equivalent_patches() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    signals = _signals(
+        pptx_exists=False,
+        error_signatures=["ppt.run_pptxgenjs:PptxArtifactMissing:pptx_file_missing"],
+    )
+
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+    repair_patches = [
+        patch
+        for patch in decision.patches
+        if any(step.step_type == PlanStepType.REPAIR_PLANNING for step in patch.new_steps)
+    ]
+
+    assert len(repair_patches) == 1
+    assert decision.metadata["deduped_patch_count"] == 0
+
+
+def test_replan_decision_metadata_contains_patch_summary() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    signals = _signals(pptx_exists=False, error_signatures=["ppt.render_preview:DependencyMissing:soffice_not_found"])
+
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+
+    assert decision.metadata["patch_count"] == len(decision.patches)
+    assert decision.metadata["insert_step_count"] >= 1
+    assert decision.metadata["skip_step_count"] >= 1
+    assert "manual_review_patch_count" in decision.metadata
+    assert "deduped_patch_count" in decision.metadata
+
+
+def test_replanner_trace_failed_without_signature_schedules_manual_review() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    signals = _signals(trace_status="failed", error_signatures=[])
+
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+    inserted_types = [step.step_type for patch in decision.patches for step in patch.new_steps]
+
+    assert PlanStepType.MANUAL_REVIEW in inserted_types
+    assert "Trace summary indicates failed run" in decision.patches[0].reason
+
+
 def test_replanner_no_change_limits_and_trace() -> None:
     class FakeTrace:
         def __init__(self) -> None:
@@ -296,6 +462,7 @@ def test_replanner_no_change_limits_and_trace() -> None:
         skipped_tool_count=5,
         repair_plan_exists=True,
         repair_action_count=3,
+        repair_auto_executable_action_count=3,
         error_signatures=["ppt.run_pptxgenjs:PptxArtifactEmpty", "search.image:ProviderUnavailable", "search.web_text:TimeoutError"],
     )
     limited = DeterministicReplanner(policy=ReplannerPolicy(max_patches=2, max_inserted_steps=1)).propose(plan=plan, signals=noisy)
@@ -315,7 +482,33 @@ def test_replanner_trace_failure_is_best_effort() -> None:
     assert decision.patches
 
 
-def test_simulate_replan_decision_applies_only_allowed_patches() -> None:
+def test_simulator_applies_only_auto_apply_patches_by_default() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    finalize_id = next(step.step_id for step in plan.steps if step.step_type == PlanStepType.FINALIZE)
+    auto_patch = _patch(target_step_id=finalize_id, new_steps=[_step(PlanStepType.TOOL_RETRY)], auto_apply=True)
+    non_auto_patch = _patch(
+        target_step_id=finalize_id,
+        new_steps=[_step(PlanStepType.FALLBACK_ASSET)],
+        auto_apply=False,
+        reason="non auto",
+    )
+    decision = ReplanDecision(
+        decision_id="decision_1",
+        run_id="run_1",
+        plan_id=plan.plan_id,
+        status="patch_proposed",
+        patches=[auto_patch, non_auto_patch],
+        created_at=utc_now_iso(),
+    )
+
+    simulated = simulate_replan_decision(plan=plan, decision=decision)
+
+    assert len(simulated.steps) == len(plan.steps) + 1
+    assert simulated.metadata["simulation"]["patches"][0]["applied"] is True
+    assert simulated.metadata["simulation"]["patches"][1]["applied"] is False
+
+
+def test_simulator_force_apply_low_risk_does_not_apply_high_risk() -> None:
     plan = build_default_ppt_plan(run_id="run_1")
     finalize_id = next(step.step_id for step in plan.steps if step.step_type == PlanStepType.FINALIZE)
     low_patch = _patch(target_step_id=finalize_id, new_steps=[_step(PlanStepType.TOOL_RETRY)], auto_apply=False)
@@ -335,13 +528,41 @@ def test_simulate_replan_decision_applies_only_allowed_patches() -> None:
         created_at=utc_now_iso(),
     )
 
-    default = simulate_replan_decision(plan=plan, decision=decision)
-    low_applied = simulate_replan_decision(plan=plan, decision=decision, allow_auto_apply=True)
-    high_applied = simulate_replan_decision(plan=plan, decision=decision, allow_auto_apply=True, allow_high_risk=True)
+    low_applied = simulate_replan_decision(plan=plan, decision=decision, force_apply_all_low_risk=True)
 
-    assert len(default.steps) == len(plan.steps)
     assert len(low_applied.steps) == len(plan.steps) + 1
-    assert len(high_applied.steps) == len(plan.steps) + 2
+    assert low_applied.metadata["simulation"]["patches"][1]["applied"] is False
+
+
+def test_simulator_allow_high_risk_requires_explicit_high_risk_flag() -> None:
+    plan = build_default_ppt_plan(run_id="run_1")
+    finalize_id = next(step.step_id for step in plan.steps if step.step_type == PlanStepType.FINALIZE)
+    high_patch = _patch(
+        target_step_id=finalize_id,
+        new_steps=[_step(PlanStepType.MANUAL_REVIEW)],
+        risk_level=PatchRiskLevel.HIGH,
+        auto_apply=True,
+        reason="high risk",
+    )
+    decision = ReplanDecision(
+        decision_id="decision_1",
+        run_id="run_1",
+        plan_id=plan.plan_id,
+        status="patch_proposed",
+        patches=[high_patch],
+        created_at=utc_now_iso(),
+    )
+
+    not_applied = simulate_replan_decision(plan=plan, decision=decision, force_apply_all_low_risk=True)
+    high_applied = simulate_replan_decision(
+        plan=plan,
+        decision=decision,
+        force_apply_all_low_risk=True,
+        allow_high_risk=True,
+    )
+
+    assert len(not_applied.steps) == len(plan.steps)
+    assert len(high_applied.steps) == len(plan.steps) + 1
     assert "simulation" in high_applied.metadata
 
 
@@ -359,10 +580,31 @@ def test_replan_report_writers_and_artifact_refs_are_safe(tmp_path: Path) -> Non
     assert (output_dir / "plan_graph.json").exists()
     assert (output_dir / "replan_decision.json").exists()
     assert "# Replan Report" in markdown
+    assert "Insert Step Count" in markdown
+    assert "Deduped Patch Count" in markdown
     assert "sk-secret123456789" not in markdown
     assert str(tmp_path) not in serialized_refs
     assert "plan_graph.json" in serialized_refs
     assert "replan_decision.json" in serialized_refs
+
+
+def test_replan_report_markdown_can_include_signal_summary(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs" / "runs" / "run_1"
+    plan = build_default_ppt_plan(run_id="run_1")
+    signals = _signals(pptx_exists=False, repair_action_count=2, repair_auto_executable_action_count=1)
+    decision = DeterministicReplanner().propose(plan=plan, signals=signals)
+
+    write_replan_report_markdown(
+        plan=plan,
+        decision=decision,
+        signals=signals,
+        output_path=output_dir / "replan_report.md",
+    )
+    markdown = (output_dir / "replan_report.md").read_text(encoding="utf-8")
+
+    assert "## Run Signals" in markdown
+    assert "pptx_exists" in markdown
+    assert "repair_auto_executable_action_count" in markdown
 
 
 def test_replan_integration_from_artifacts_and_missing_artifacts(tmp_path: Path) -> None:
