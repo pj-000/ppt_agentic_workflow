@@ -23,6 +23,7 @@ DOC_MIN_LINES = {
 }
 
 README_DOC_LINKS = [
+    "docs/run_full_flow_locally.md",
     "docs/harness_engineering_overview.md",
     "docs/architecture_overview.md",
     "docs/module_map.md",
