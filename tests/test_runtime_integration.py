@@ -32,6 +32,7 @@ from backend.harness.runtime_integration import (  # noqa: E402
     write_harness_manifest,
     write_harness_summary_markdown,
 )
+from backend.harness.runtime_integration.post_run import _benchmark_output_refs, _status_from_state  # noqa: E402
 
 
 def _quality_report() -> dict[str, Any]:
@@ -106,6 +107,19 @@ class FakeTrace:
         self.records.append((stage, payload))
 
 
+class FakeBenchmarkReport:
+    def __init__(self) -> None:
+        self.benchmark_id = "bench_x"
+        self.status = "pass"
+        self.metadata: dict[str, Any] = {}
+
+
+class BenchmarkFallbackRunner(PostRunHarnessRunner):
+    def _run_one_run_benchmark(self, *, run_id: str, run_path: Path) -> FakeBenchmarkReport:
+        del run_id, run_path
+        return FakeBenchmarkReport()
+
+
 def test_runtime_integration_models_serialize_and_sanitize_paths() -> None:
     artifact = HarnessArtifactRef(
         name="quality_report",
@@ -128,6 +142,13 @@ def test_runtime_integration_models_serialize_and_sanitize_paths() -> None:
     assert "/private/tmp" not in serialized
     assert "/Users/" not in serialized
     assert "system_prompt=private" not in serialized
+
+
+def test_harness_manifest_has_schema_version_and_generated_at() -> None:
+    manifest = HarnessManifest(run_id="run_1")
+
+    assert manifest.schema_version == "1.0.0"
+    assert manifest.generated_at
 
 
 def test_collect_run_artifacts_required_optional_and_safe_paths(tmp_path: Path) -> None:
@@ -161,6 +182,23 @@ def test_collect_run_artifacts_missing_quality_is_required_missing(tmp_path: Pat
     assert quality.exists is False
     assert repair.required is False
     assert repair.exists is False
+
+
+def test_collect_run_artifacts_limits_preview_artifacts(tmp_path: Path) -> None:
+    run_dir = tmp_path / "outputs" / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "quality_report.json").write_text(json.dumps(_quality_report()), encoding="utf-8")
+    (run_dir / "trace_summary.json").write_text(json.dumps(_trace_summary()), encoding="utf-8")
+    preview_dir = run_dir / "preview"
+    preview_dir.mkdir()
+    for index in range(25):
+        (preview_dir / f"slide_{index}.png").write_bytes(b"png")
+
+    artifacts = collect_run_artifacts(run_id="run_1", run_dir=run_dir)
+    preview_pngs = [artifact for artifact in artifacts if artifact.kind == HarnessArtifactKind.PREVIEW and artifact.name.endswith(".png")]
+
+    assert len(preview_pngs) == 20
+    assert any(artifact.name == "preview_images_truncated" for artifact in artifacts)
 
 
 def test_harness_manifest_and_bundle_writers(tmp_path: Path) -> None:
@@ -210,11 +248,27 @@ def test_harness_summary_markdown_is_safe(tmp_path: Path) -> None:
     assert "## Generated Artifacts" in markdown
     assert "## Missing Artifacts" in markdown
     assert "## Errors" in markdown
+    assert "## Status Reason" in markdown
     assert "/private/tmp" not in markdown
     assert "/home/" not in markdown
     assert "/Users/" not in markdown
     assert "sk-secret123456789" not in markdown
     assert "hidden_reasoning=private" not in markdown
+
+
+def test_harness_summary_contains_status_reason(tmp_path: Path) -> None:
+    manifest = HarnessManifest(
+        run_id="run_1",
+        status="warning",
+        metadata={"status_reasons": ["replan patch proposed"]},
+    )
+    result = HarnessBundleResult(run_id="run_1", status="warning", manifest=manifest)
+
+    write_harness_summary_markdown(result=result, output_path=tmp_path / "harness_summary.md")
+    markdown = (tmp_path / "harness_summary.md").read_text(encoding="utf-8")
+
+    assert "## Status Reason" in markdown
+    assert "replan patch proposed" in markdown
 
 
 def test_post_run_runner_generates_bundle_without_memory(tmp_path: Path) -> None:
@@ -239,6 +293,50 @@ def test_post_run_runner_generates_bundle_without_memory(tmp_path: Path) -> None
     assert any(stage == "artifact.created" for stage, _ in trace.records)
 
 
+def test_post_run_runner_final_manifest_does_not_mark_self_generated_artifacts_missing(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+
+    PostRunHarnessRunner(output_root=output_root).run(run_id="run_1", run_dir=run_dir)
+    manifest = json.loads((run_dir / "harness_manifest.json").read_text(encoding="utf-8"))
+    by_name = {artifact["name"]: artifact for artifact in manifest["artifacts"]}
+
+    assert by_name["harness_manifest.json"]["exists"] is True
+    assert by_name["harness_bundle.json"]["exists"] is True
+    assert by_name["harness_summary.md"]["exists"] is True
+    assert "harness_manifest.json" not in manifest["missing_optional_artifacts"]
+    assert "harness_bundle.json" not in manifest["missing_optional_artifacts"]
+    assert "harness_summary.md" not in manifest["missing_optional_artifacts"]
+
+
+def test_post_run_runner_manifest_generated_artifacts_match_result_refs(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+
+    result = PostRunHarnessRunner(output_root=output_root).run(run_id="run_1", run_dir=run_dir)
+    bundle = json.loads((run_dir / "harness_bundle.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "harness_manifest.json").read_text(encoding="utf-8"))
+
+    assert result.manifest.generated_artifacts == result.artifact_refs
+    assert bundle["artifact_refs"] == manifest["generated_artifacts"]
+
+
+def test_post_run_artifact_created_trace_contains_final_harness_refs(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+    trace = FakeTrace()
+
+    PostRunHarnessRunner(output_root=output_root, trace=trace).run(run_id="run_1", run_dir=run_dir)
+    payload = next(payload for stage, payload in trace.records if stage == "artifact.created")
+
+    assert "harness_manifest_json" in payload["artifact_refs"]
+    assert "harness_bundle_json" in payload["artifact_refs"]
+    assert "harness_summary_md" in payload["artifact_refs"]
+
+
 def test_post_run_runner_writes_episode_memory_with_fake_memory(tmp_path: Path) -> None:
     output_root = tmp_path / "outputs"
     run_dir = output_root / "runs" / "run_1"
@@ -252,6 +350,62 @@ def test_post_run_runner_writes_episode_memory_with_fake_memory(tmp_path: Path) 
     assert result.manifest.memory_writes == result.memory_write_ids
 
 
+def test_post_run_status_policy() -> None:
+    assert _status_from_state(missing_required=["quality_report.json"], errors=[]) == "failed"
+    assert _status_from_state(missing_required=[], errors=[], trace_status="failed") == "failed"
+    assert _status_from_state(missing_required=[], errors=[], quality_status="failed") == "failed"
+    assert _status_from_state(missing_required=[], errors=[], benchmark_status="fail") == "warning"
+    assert _status_from_state(missing_required=[], errors=["warning"]) == "warning"
+    assert _status_from_state(missing_required=[], errors=[], replan_status="patch_proposed") == "warning"
+    assert _status_from_state(missing_required=[], errors=[], repair_plan_status="planned") == "warning"
+    assert _status_from_state(missing_required=[], errors=[], repair_plan_status="empty", replan_status="no_change") == "success"
+
+
+def test_post_run_status_failed_when_trace_failed(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+    trace = _trace_summary()
+    trace["status"] = "failed"
+    (run_dir / "trace_summary.json").write_text(json.dumps(trace), encoding="utf-8")
+
+    result = PostRunHarnessRunner(output_root=output_root).run(run_id="run_1", run_dir=run_dir)
+
+    assert result.status == "failed"
+
+
+def test_post_run_status_warning_when_repair_plan_planned() -> None:
+    status = _status_from_state(missing_required=[], errors=[], repair_plan_status="planned")
+
+    assert status == "warning"
+
+
+def test_post_run_status_warning_when_replan_patch_proposed(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+    quality = _quality_report()
+    quality["run"]["pptx_exists"] = False
+    (run_dir / "quality_report.json").write_text(json.dumps(quality), encoding="utf-8")
+
+    result = PostRunHarnessRunner(output_root=output_root).run(run_id="run_1", run_dir=run_dir)
+
+    assert result.status == "warning"
+    assert result.manifest.replan_status == "patch_proposed"
+
+
+def test_post_run_status_success_when_repair_empty_and_replan_no_change(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+
+    result = PostRunHarnessRunner(output_root=output_root).run(run_id="run_1", run_dir=run_dir)
+
+    assert result.manifest.repair_plan_status in {"empty", "skipped"}
+    assert result.manifest.replan_status == "no_change"
+    assert result.status == "success"
+
+
 def test_post_run_runner_one_run_benchmark_is_optional(tmp_path: Path) -> None:
     output_root = tmp_path / "outputs"
     run_dir = output_root / "runs" / "run_1"
@@ -263,6 +417,29 @@ def test_post_run_runner_one_run_benchmark_is_optional(tmp_path: Path) -> None:
     assert result.benchmark_id
     assert result.manifest.benchmark_status in {"pass", "warning", "fail", "empty"}
     assert (output_root / "benchmarks" / result.benchmark_id / "benchmark_report.json").exists()
+
+
+def test_post_run_one_run_benchmark_refs_fallback_when_metadata_missing(tmp_path: Path) -> None:
+    output_root = tmp_path / "outputs"
+    run_dir = output_root / "runs" / "run_1"
+    _write_run_artifacts(run_dir)
+    config = HarnessIntegrationConfig(enable_episode_memory=False, enable_one_run_benchmark=True)
+
+    result = BenchmarkFallbackRunner(output_root=output_root, config=config).run(run_id="run_1", run_dir=run_dir)
+
+    assert result.benchmark_id == "bench_x"
+    assert "benchmark_report_json" in result.artifact_refs
+    assert "benchmark_report_md" in result.artifact_refs
+    assert "case_results_jsonl" in result.artifact_refs
+
+
+def test_benchmark_output_refs_fallback_when_metadata_missing(tmp_path: Path) -> None:
+    refs = _benchmark_output_refs(output_root=tmp_path / "outputs", benchmark_id="bench_x", metadata={})
+
+    assert "benchmark_report_json" in refs
+    assert "benchmark_report_md" in refs
+    assert "case_results_jsonl" in refs
+    assert str(tmp_path) not in json.dumps(refs)
 
 
 def test_post_run_runner_fail_soft_and_fail_hard(tmp_path: Path) -> None:

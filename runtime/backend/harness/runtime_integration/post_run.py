@@ -135,23 +135,42 @@ class PostRunHarnessRunner:
             if benchmark_report is not None:
                 benchmark_id = benchmark_report.benchmark_id
                 benchmark_status = benchmark_report.status
-                output_paths = benchmark_report.metadata.get("output_paths", {})
-                if isinstance(output_paths, dict):
-                    generated_artifacts.update(sanitize_runtime_artifacts(output_paths))
+                generated_artifacts.update(
+                    _benchmark_output_refs(
+                        output_root=self.output_root,
+                        benchmark_id=benchmark_id,
+                        metadata=benchmark_report.metadata,
+                    )
+                )
 
         artifacts = collect_run_artifacts(run_id=run_id, run_dir=run_path)
-        missing_required = [artifact.name for artifact in artifacts if artifact.required and not artifact.exists]
-        missing_optional = [
-            artifact.name
-            for artifact in artifacts
-            if not artifact.required and not artifact.exists and self.config.include_optional_artifacts
-        ]
+        missing_required, missing_optional = _missing_artifact_names(
+            artifacts,
+            include_optional=self.config.include_optional_artifacts,
+        )
         quality_status = _read_nested_status(run_path / "quality_report.json", "summary")
         trace_status = _read_status(run_path / "trace_summary.json")
-        status = _status_from_state(missing_required=missing_required, errors=errors)
+        status = _status_from_state(
+            missing_required=missing_required,
+            errors=errors,
+            quality_status=quality_status,
+            trace_status=trace_status,
+            repair_plan_status=repair_plan_status,
+            replan_status=replan_status,
+            benchmark_status=benchmark_status,
+        )
+        status_reasons = _status_reasons(
+            missing_required=missing_required,
+            errors=errors,
+            quality_status=quality_status,
+            trace_status=trace_status,
+            repair_plan_status=repair_plan_status,
+            replan_status=replan_status,
+            benchmark_status=benchmark_status,
+        )
         manifest = HarnessManifest(
             run_id=run_id,
-            status=status if status != "partial" else "partial",
+            status=status,
             artifacts=artifacts,
             missing_required_artifacts=missing_required,
             missing_optional_artifacts=missing_optional,
@@ -162,8 +181,8 @@ class PostRunHarnessRunner:
             replan_status=replan_status,
             benchmark_status=benchmark_status,
             memory_writes=memory_write_ids,
-            summary=_summary_text(status, missing_required, errors),
-            metadata=sanitize_runtime_mapping({**metadata, **self.config.metadata}),
+            summary=_summary_text(status, missing_required, errors, status_reasons),
+            metadata=sanitize_runtime_mapping({**metadata, "status_reasons": status_reasons, **self.config.metadata}),
         )
         result = HarnessBundleResult(
             run_id=run_id,
@@ -178,17 +197,24 @@ class PostRunHarnessRunner:
             metadata=sanitize_runtime_mapping({"output_root": str(self.output_root)}),
         )
 
-        manifest_refs = write_harness_manifest(manifest, run_path)
+        manifest_refs = self._fail_soft("harness manifest writing", lambda: write_harness_manifest(manifest, run_path), errors) or {}
         result.artifact_refs.update(manifest_refs)
-        bundle_refs = write_harness_bundle_result(result, run_path)
+        bundle_refs = self._fail_soft("harness bundle writing", lambda: write_harness_bundle_result(result, run_path), errors) or {}
         result.artifact_refs.update(bundle_refs)
         result.manifest.generated_artifacts = sanitize_runtime_artifacts(result.artifact_refs)
         summary_path = run_path / "harness_summary.md"
-        write_harness_summary_markdown(result=result, output_path=summary_path)
+        self._fail_soft("harness summary writing", lambda: write_harness_summary_markdown(result=result, output_path=summary_path), errors)
         result.artifact_refs.update(sanitize_runtime_artifacts({"harness_summary_md": str(summary_path)}))
-        result.manifest.generated_artifacts = sanitize_runtime_artifacts(result.artifact_refs)
-        write_harness_manifest(result.manifest, run_path)
-        write_harness_bundle_result(result, run_path)
+        self._finalize_result(
+            result=result,
+            run_path=run_path,
+            errors=errors,
+            quality_status=quality_status,
+            trace_status=trace_status,
+            repair_plan_status=repair_plan_status,
+            replan_status=replan_status,
+            benchmark_status=benchmark_status,
+        )
         self._record_artifact_created(result)
         return result
 
@@ -249,6 +275,69 @@ class PostRunHarnessRunner:
         except Exception:
             return
 
+    def _finalize_result(
+        self,
+        *,
+        result: HarnessBundleResult,
+        run_path: Path,
+        errors: list[str],
+        quality_status: str | None,
+        trace_status: str | None,
+        repair_plan_status: str | None,
+        replan_status: str | None,
+        benchmark_status: str | None,
+    ) -> None:
+        final_artifacts = collect_run_artifacts(run_id=result.run_id, run_dir=run_path)
+        missing_required, missing_optional = _missing_artifact_names(
+            final_artifacts,
+            include_optional=self.config.include_optional_artifacts,
+        )
+        final_status = _status_from_state(
+            missing_required=missing_required,
+            errors=errors,
+            quality_status=quality_status,
+            trace_status=trace_status,
+            repair_plan_status=repair_plan_status,
+            replan_status=replan_status,
+            benchmark_status=benchmark_status,
+        )
+        status_reasons = _status_reasons(
+            missing_required=missing_required,
+            errors=errors,
+            quality_status=quality_status,
+            trace_status=trace_status,
+            repair_plan_status=repair_plan_status,
+            replan_status=replan_status,
+            benchmark_status=benchmark_status,
+        )
+        final_refs = sanitize_runtime_artifacts(result.artifact_refs)
+        result.artifact_refs = final_refs
+        result.status = final_status
+        result.errors = list(errors)
+        result.manifest = result.manifest.model_copy(
+            update={
+                "status": final_status,
+                "artifacts": final_artifacts,
+                "missing_required_artifacts": missing_required,
+                "missing_optional_artifacts": missing_optional,
+                "generated_artifacts": final_refs,
+                "summary": _summary_text(final_status, missing_required, errors, status_reasons),
+                "metadata": sanitize_runtime_mapping(
+                    {
+                        **result.manifest.metadata,
+                        "status_reasons": status_reasons,
+                    }
+                ),
+            }
+        )
+        self._fail_soft("final harness manifest writing", lambda: write_harness_manifest(result.manifest, run_path), errors)
+        self._fail_soft("final harness bundle writing", lambda: write_harness_bundle_result(result, run_path), errors)
+        self._fail_soft(
+            "final harness summary writing",
+            lambda: write_harness_summary_markdown(result=result, output_path=run_path / "harness_summary.md"),
+            errors,
+        )
+
 
 def _read_status(path: Path) -> str | None:
     payload = _read_json_object(path)
@@ -276,17 +365,107 @@ def _read_json_object(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _status_from_state(*, missing_required: list[str], errors: list[str]) -> str:
+def _missing_artifact_names(
+    artifacts: list[Any],
+    *,
+    include_optional: bool,
+) -> tuple[list[str], list[str]]:
+    missing_required = [artifact.name for artifact in artifacts if artifact.required and not artifact.exists]
+    missing_optional = [
+        artifact.name
+        for artifact in artifacts
+        if include_optional and not artifact.required and not artifact.exists
+    ]
+    return missing_required, missing_optional
+
+
+def _status_from_state(
+    *,
+    missing_required: list[str],
+    errors: list[str],
+    quality_status: str | None = None,
+    trace_status: str | None = None,
+    repair_plan_status: str | None = None,
+    replan_status: str | None = None,
+    benchmark_status: str | None = None,
+) -> str:
     if missing_required:
         return "failed"
+    if trace_status == "failed":
+        return "failed"
+    if quality_status in {"failed", "fail"}:
+        return "failed"
+    if benchmark_status == "fail":
+        return "warning"
     if errors:
+        return "warning"
+    if quality_status == "warning" or trace_status == "warning":
+        return "warning"
+    if repair_plan_status in {"planned", "created"}:
+        return "warning"
+    if replan_status == "patch_proposed":
         return "warning"
     return "success"
 
 
-def _summary_text(status: str, missing_required: list[str], errors: list[str]) -> str:
+def _status_reasons(
+    *,
+    missing_required: list[str],
+    errors: list[str],
+    quality_status: str | None = None,
+    trace_status: str | None = None,
+    repair_plan_status: str | None = None,
+    replan_status: str | None = None,
+    benchmark_status: str | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+    if missing_required:
+        reasons.append(f"missing required artifacts: {', '.join(missing_required)}")
+    if trace_status == "failed":
+        reasons.append("trace status failed")
+    if quality_status in {"failed", "fail"}:
+        reasons.append("quality status failed")
+    if benchmark_status == "fail":
+        reasons.append("optional one-run benchmark failed")
+    if errors:
+        reasons.append(f"{len(errors)} integration warning/error(s)")
+    if quality_status == "warning":
+        reasons.append("quality status warning")
+    if trace_status == "warning":
+        reasons.append("trace status warning")
+    if repair_plan_status in {"planned", "created"}:
+        reasons.append(f"repair plan status {repair_plan_status}")
+    if replan_status == "patch_proposed":
+        reasons.append("replan patch proposed")
+    return [sanitize_runtime_text(reason, limit=300) for reason in reasons]
+
+
+def _summary_text(status: str, missing_required: list[str], errors: list[str], status_reasons: list[str] | None = None) -> str:
     if missing_required:
         return f"Post-run harness completed with missing required artifacts: {', '.join(missing_required)}"
     if errors:
         return f"Post-run harness completed with {len(errors)} warning(s)."
+    if status == "warning" and status_reasons:
+        return f"Post-run harness completed with warning: {status_reasons[0]}"
+    if status == "failed" and status_reasons:
+        return f"Post-run harness failed: {status_reasons[0]}"
     return "Post-run harness completed successfully."
+
+
+def _benchmark_output_refs(
+    *,
+    output_root: Path,
+    benchmark_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    output_paths = metadata.get("output_paths", {}) if isinstance(metadata, dict) else {}
+    if isinstance(output_paths, dict) and output_paths:
+        return sanitize_runtime_artifacts(output_paths)
+    output_dir = output_root / "benchmarks" / benchmark_id
+    return sanitize_runtime_artifacts(
+        {
+            "benchmark_report_json": str(output_dir / "benchmark_report.json"),
+            "benchmark_report_md": str(output_dir / "benchmark_report.md"),
+            "case_results_jsonl": str(output_dir / "case_results.jsonl"),
+        }
+    )

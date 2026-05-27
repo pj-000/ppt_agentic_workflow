@@ -29,16 +29,24 @@ def write_harness_summary_markdown(
         f"- Benchmark Status: `{_cell(manifest.benchmark_status or '')}`",
         f"- Memory Writes: {len(result.memory_write_ids)}",
         "",
-        "## Required Artifacts",
+        "## Status Reason",
         "",
     ]
+    lines.extend(_status_reasons(result))
+    lines.extend(
+        [
+            "",
+            "## Required Artifacts",
+            "",
+        ]
+    )
     lines.extend(_artifact_table(required))
     lines.extend(["", "## Optional Artifacts", ""])
     lines.extend(_artifact_table(optional))
     lines.extend(["", "## Generated Artifacts", ""])
     if manifest.generated_artifacts:
         for name, value in manifest.generated_artifacts.items():
-            lines.append(f"- {_cell(name)}: `{_cell(value)}`")
+            lines.append(f"- {_cell(name)}: `{_cell(value)}` (exists: {_generated_ref_exists(manifest.artifacts, value)})")
     else:
         lines.append("(none)")
     lines.extend(["", "## Missing Artifacts", ""])
@@ -89,6 +97,27 @@ def _next_actions(result: HarnessBundleResult) -> list[str]:
     if result.memory_write_ids:
         actions.append("Inspect episodic memory record.")
     return actions or ["No immediate follow-up action."]
+
+
+def _status_reasons(result: HarnessBundleResult) -> list[str]:
+    manifest = result.manifest
+    reasons = list(manifest.metadata.get("status_reasons", []))
+    if not reasons:
+        if manifest.missing_required_artifacts:
+            reasons.append(f"Missing required artifacts: {', '.join(manifest.missing_required_artifacts)}")
+        if result.errors:
+            reasons.append(f"{len(result.errors)} integration warning/error(s).")
+        if manifest.repair_plan_status in {"planned", "created"}:
+            reasons.append(f"Repair plan status is {manifest.repair_plan_status}.")
+        if manifest.replan_status == "patch_proposed":
+            reasons.append("Replanner proposed deterministic patches.")
+        if manifest.benchmark_status == "fail":
+            reasons.append("Optional one-run benchmark failed.")
+    return [f"- {_cell(reason)}" for reason in (reasons or ["No warning or failure reason."])]
+
+
+def _generated_ref_exists(artifacts: list[HarnessArtifactRef], value: str) -> bool:
+    return any(artifact.path == value and artifact.exists for artifact in artifacts)
 
 
 def _cell(value: Any) -> str:

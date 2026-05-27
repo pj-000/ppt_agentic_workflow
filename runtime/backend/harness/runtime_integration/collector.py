@@ -28,6 +28,7 @@ def collect_run_artifacts(
     *,
     run_id: str,
     run_dir: str | Path,
+    max_preview_artifacts: int = 20,
 ) -> list[HarnessArtifactRef]:
     del run_id
     path = Path(run_dir)
@@ -43,7 +44,7 @@ def collect_run_artifacts(
         for name, kind, required, description in _KNOWN_ARTIFACTS
     ]
     artifacts.extend(_discover_pptx_artifacts(path))
-    artifacts.extend(_discover_preview_artifacts(path))
+    artifacts.extend(_discover_preview_artifacts(path, max_preview_artifacts=max_preview_artifacts))
     return artifacts
 
 
@@ -62,13 +63,15 @@ def _discover_pptx_artifacts(path: Path) -> list[HarnessArtifactRef]:
     ]
 
 
-def _discover_preview_artifacts(path: Path) -> list[HarnessArtifactRef]:
+def _discover_preview_artifacts(path: Path, *, max_preview_artifacts: int = 20) -> list[HarnessArtifactRef]:
     preview_suffixes = {".png", ".jpg", ".jpeg", ".webp"}
     preview_files = []
     for child in path.rglob("*"):
         if child.is_file() and child.suffix.lower() in preview_suffixes:
             preview_files.append(child)
-    return [
+    sorted_files = sorted(preview_files)
+    returned_files = sorted_files[: max(max_preview_artifacts, 0)]
+    artifacts = [
         HarnessArtifactRef(
             name=item.name,
             kind=HarnessArtifactKind.PREVIEW,
@@ -77,5 +80,18 @@ def _discover_preview_artifacts(path: Path) -> list[HarnessArtifactRef]:
             required=False,
             description="Preview image artifact",
         )
-        for item in sorted(preview_files)
+        for item in returned_files
     ]
+    omitted_count = max(len(sorted_files) - len(returned_files), 0)
+    if omitted_count:
+        artifacts.append(
+            HarnessArtifactRef(
+                name="preview_images_truncated",
+                kind=HarnessArtifactKind.PREVIEW,
+                path=f"{omitted_count} preview image(s) omitted from manifest",
+                exists=True,
+                required=False,
+                description="Preview image artifact list truncated to keep manifest compact",
+            )
+        )
+    return artifacts

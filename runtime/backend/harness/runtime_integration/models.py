@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
@@ -72,6 +73,9 @@ class HarnessIntegrationConfig(BaseModel):
 
 
 class HarnessManifest(BaseModel):
+    schema_version: str = "1.0.0"
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
     run_id: str
     status: Literal["created", "partial", "success", "warning", "failed"] = "created"
 
@@ -92,7 +96,18 @@ class HarnessManifest(BaseModel):
     summary: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("run_id", "quality_status", "trace_status", "repair_plan_status", "replan_status", "benchmark_status", "summary", mode="before")
+    @field_validator(
+        "schema_version",
+        "generated_at",
+        "run_id",
+        "quality_status",
+        "trace_status",
+        "repair_plan_status",
+        "replan_status",
+        "benchmark_status",
+        "summary",
+        mode="before",
+    )
     @classmethod
     def _safe_optional_text(cls, value: Any) -> str | None:
         if value is None:
