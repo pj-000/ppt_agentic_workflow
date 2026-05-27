@@ -89,6 +89,8 @@ flowchart TD
 
 ## Install
 
+Run the setup commands as separate shell lines from a normal local checkout:
+
 ```bash
 cd <your-local-checkout>
 cp .env.example .env
