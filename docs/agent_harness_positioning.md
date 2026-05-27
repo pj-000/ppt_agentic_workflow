@@ -1,49 +1,51 @@
-# PPT Generation Agent Harness Positioning
+# Agent Harness Positioning
 
-## Project Name
+## Name
 
 PPT Generation Agent Harness
 
-## One-Line Description
+## Positioning Statement
 
-An evaluation-and-repair driven Agent Harness for document-to-PPT generation.
+This project is not a fully autonomous multi-agent system. It is a controlled Agentic Workflow executed by a PPT Generation Agent Harness.
 
-## Positioning
+本项目不是完全自治式多 Agent 系统，而是一个面向文档到 PPT 生成任务的主控式 Agentic Workflow。Orchestrator 负责主流程，Planner / Research / Asset / Evaluator 是专职 agent-like workers，Harness 负责统一执行边界、工具调用、质量评估、trace、benchmark、memory、repair 和 deterministic replanning。
 
-This project is not a fully autonomous multi-agent system. It is a controlled agentic workflow executed by a PPT Agent Harness.
+## Why the Distinction Matters
 
-The existing generation path is an agentic workflow: it plans a deck, gathers supporting material, prepares assets, generates slide code, assembles a PPTX, evaluates quality, and performs localized repair when needed.
+- A fully autonomous multi-agent system usually implies free-form negotiation, autonomous delegation, or agent-to-agent coordination.
+- This project keeps orchestration centralized and auditable.
+- Workers exchange structured artifacts, not free-form hidden conversations.
+- The engineering value is in reliability, measurement, repairability, and reproducibility around PPT generation.
 
-The engineering contribution is the harness around that workflow: runtime contracts, tool execution boundaries, artifact capture, quality measurement, repair control, memory reuse, observability, and benchmark reporting.
+## Implemented Harness Layers
 
-## What It Is
+| Layer | Role |
+|---|---|
+| AgentRuntime | Normalizes agent-like worker execution into `AgentResult`. |
+| ToolRuntime | Normalizes tool calls, retries, timeouts, and error signatures. |
+| Quality Harness | Produces quality reports for run and slide inspection. |
+| Observability | Writes structured trace events and trace summaries. |
+| Benchmark | Evaluates existing run artifacts offline. |
+| Memory | Stores episodic, semantic, and procedural memory in JSONL. |
+| Repair | Builds deterministic repair issues, plans, and reports. |
+| Replanner | Proposes deterministic PlanGraph patches without auto-applying them. |
+| Runtime Integration | Bundles post-run artifacts into manifest, bundle, and summary. |
 
-- A controlled agentic workflow for document-to-PPT generation.
-- Orchestrator-led execution with explicit stage boundaries.
-- Specialist agent-like workers for planning, research, assets, evaluation, and repair.
-- Tool-augmented generation using document, search, image, PPTX, preview, and evaluation tools.
-- A QA and repair loop focused on improving generated PPT quality.
-- Memory-assisted repair that can reuse validated lessons conservatively.
-- A benchmarked harness that can measure quality and reliability across repeatable cases.
+## Resume Boundary
 
-## What It Is Not
+Good wording:
 
-- Not a fully autonomous multi-agent system.
-- Not free-form agent negotiation, debate, or voting.
-- Not a chat-only demo.
-- Not a frontend-focused PPT application.
-- Not a rewrite of the existing PPT generation backend.
+- "Built a PPT Generation Agent Harness for controlled document-to-PPT workflows."
+- "Unified agent execution, tool execution, quality reporting, trace, benchmark, memory, repair, and deterministic replanning."
+- "Designed offline benchmark and post-run bundle artifacts for reproducibility."
 
-## Why This Matters for PPT Quality
+Avoid wording:
 
-- Stable execution keeps planning, generation, preview, QA, and repair in known stages.
-- Measurable quality makes regressions visible before architecture changes.
-- Localized repair improves weak slides without regenerating an entire deck.
-- Artifact-level observability makes failures diagnosable from outputs, traces, previews, and reports.
-- Reusable repair experience helps the system avoid repeating known failure patterns.
+- "Built a fully autonomous multi-agent system."
+- "Agents autonomously negotiate and coordinate."
+- "Automatically repairs and replans every PPT run in production."
+- "Improved success rate by a fixed percentage" unless backed by a real benchmark report.
 
-## Compatibility Stance
+## Compatibility Boundary
 
-The harness should preserve the existing `OrchestratorAgent`, `PlannerAgent`, `ResearchAgent`, `AssetAgent`, `EvaluatorAgent`, `RuntimeMemoryStore`, `RepairOrchestrator`, CLI entrypoints, and FastAPI routes.
-
-New architecture should be added through adapters, wrappers, and facades before any internal replacement is considered.
+The harness should preserve the existing `OrchestratorAgent`, `PlannerAgent`, `ResearchAgent`, `AssetAgent`, `EvaluatorAgent`, `RuntimeMemoryStore`, `RepairOrchestrator`, CLI entrypoints, and FastAPI routes. New behavior should be introduced through adapters, wrappers, optional hooks, and post-run helpers before any deeper replacement is considered.

@@ -4,31 +4,52 @@
 
 Preserve the working PPT generation path. Add harness layers around it before replacing internals.
 
-## Guardrails
+## Compatibility Guardrails
 
-- Preserve `OrchestratorAgent`.
-- Preserve `PlannerAgent`, `ResearchAgent`, `AssetAgent`, and `EvaluatorAgent`.
-- Preserve `RuntimeMemoryStore` and `RepairOrchestrator`.
-- Preserve existing CLI entrypoints.
-- Preserve FastAPI routes including `/generate_ppt`, `/stream_ppt_outline`, `/stream_ppt_from_outline`, `/stream_evaluate/ppt`, download routes, and preview routes.
-- Preserve the current successful generation path.
-- Add wrappers, adapters, and facades before replacing internals.
-- Prioritize quality metrics before broader architecture changes.
-- Keep first-pass replanning deterministic and conservative.
-- Gate memory promotion with benchmark evidence.
-- Do not expose hidden reasoning, private prompts, API keys, environment variables, or sensitive workflow details in traces or reports.
+- Do not rewrite `OrchestratorAgent` for architecture optics.
+- Do not rewrite `PlannerAgent`, `ResearchAgent`, `AssetAgent`, or `EvaluatorAgent` just to fit a new abstraction.
+- Do not rewrite or delete `RepairOrchestrator`.
+- Do not delete `RuntimeMemoryStore` or change the old repair memory file format.
+- Do not change existing CLI entrypoints.
+- Do not change FastAPI response contracts or existing route semantics.
+- Do not add required UI or required API endpoints for harness features.
+- Prefer adapters, wrappers, facades, and optional hooks.
+
+## Agent Harness Guardrails
+
+- Do not describe this project as a fully autonomous multi-agent system.
+- Do not add agent-to-agent negotiation, debate, voting, or free-form coordination.
+- Do not let Planner / Research / Asset / Evaluator "chat" with one another.
+- Do not default to automatic repair execution.
+- Do not default to applying replan patches.
+- Keep deterministic replanning conservative and auditable.
+
+## Data and Safety Guardrails
+
+- Do not write API keys, tokens, passwords, authorization headers, system prompts, hidden reasoning, chain-of-thought, raw model responses, full tracebacks, or environment dumps into trace, memory, reports, benchmark artifacts, or summaries.
+- Do not store local absolute paths in public artifacts when a basename or `runs/{run_id}/...` reference is enough.
+- Do not store full prompt bundles in memory.
+- Do not promote memory without evidence from successful outcomes or benchmark gates.
+
+## Benchmark and Documentation Guardrails
+
+- Do not invent benchmark numbers.
+- Do not claim production deployment or real user scale unless backed by evidence.
+- Do not state fixed success-rate improvements without a real `benchmark_report`.
+- Use TBD placeholders for metrics that have not been measured.
+- Distinguish offline benchmark, post-run bundle generation, and live PPT generation.
 
 ## Allowed First Moves
 
-- Add documentation that clarifies the Agentic Workflow versus Agent Harness distinction.
-- Add null-safe quality collection and reporting.
-- Add tests for schema serialization, edge cases, report writing, and failure tolerance.
-- Add optional integration hooks that do not block generation when reporting fails.
+- Add internal helpers that are disabled by default.
+- Add post-run artifact integration that is fail-soft.
+- Add tests for schema serialization, report writing, artifact missing cases, and safety redaction.
+- Add documentation and demo runbooks that explain current capabilities and limitations.
 
 ## Deferred Work
 
-- Do not introduce autonomous agent negotiation.
-- Do not add agent names only for resume optics.
-- Do not rewrite the planner or orchestrator as a new framework.
-- Do not change existing API response contracts unless a later phase explicitly requires it.
-- Do not add heavy dependencies for quality reporting in the first pass.
+- Optional Orchestrator hook for automatic post-run bundle generation.
+- Partial ToolRuntime wiring into the live generation path.
+- Repair execution integration for low-risk actions.
+- Benchmark integration with memory hit rate and repair metrics.
+- Trace Viewer UI.
