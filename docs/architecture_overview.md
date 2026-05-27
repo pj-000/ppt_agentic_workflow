@@ -82,3 +82,8 @@ flowchart TD
 
 `ppt_backend/` and the existing `runtime/` flow remain the compatibility baseline.
 Harness modules should wrap, adapt, or analyze the run rather than rewrite the core generation path.
+
+## Raw Markdown Guardrail
+
+Keep Mermaid diagrams and architecture tables as real multi-line Markdown.
+The rendered view and raw view should both be readable during project review.

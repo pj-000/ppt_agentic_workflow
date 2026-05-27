@@ -55,3 +55,8 @@ Preserve the working PPT generation path. Add harness layers around it before re
 - Repair execution integration for low-risk actions.
 - Benchmark integration with memory hit rate and repair metrics.
 - Trace Viewer UI.
+
+## Raw Markdown Guardrail
+
+Keep guardrails as separate bullets.
+This makes future refactor reviews easier and prevents compressed Markdown from hiding safety constraints.

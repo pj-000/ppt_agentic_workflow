@@ -56,3 +56,8 @@ and FastAPI routes.
 
 New behavior should be introduced through adapters, wrappers, optional hooks, and post-run helpers
 before any deeper replacement is considered.
+
+## Raw Markdown Guardrail
+
+Keep positioning statements line-separated and conservative.
+Do not collapse the distinction between controlled Agentic Workflow and fully autonomous multi-agent systems.

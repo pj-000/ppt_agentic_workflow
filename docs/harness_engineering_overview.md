@@ -70,3 +70,9 @@ Harness Engineering makes it possible to answer questions like:
 - Does the benchmark show a regression?
 - Is a memory record worth keeping or promoting?
 - Which artifacts should be shown in a demo?
+
+## Raw Markdown Guardrail
+
+Keep this document as real multi-line Markdown.
+Headings, lists, tables, and code fences should stay on separate lines.
+This prevents the GitHub raw view from collapsing into unreadable single-line blobs.

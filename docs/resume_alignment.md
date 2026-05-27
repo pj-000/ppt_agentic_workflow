@@ -52,3 +52,8 @@ PPT Generation Agent Harness｜面向文档到 PPT 生成的 Agent 执行框架
 - Top error signature count reduced by TBD
 
 Fill these only after running a real benchmark and checking the generated report.
+
+## Raw Markdown Guardrail
+
+Keep resume bullets as separate lines so they can be copied into Chinese or English resumes.
+Do not replace TBD metric placeholders with unverified numbers.

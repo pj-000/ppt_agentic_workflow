@@ -40,3 +40,8 @@ Optional artifacts:
 - PPTX and preview images
 
 Optional artifacts may be missing on successful runs, especially when no repair or replan is needed.
+
+## Raw Markdown Guardrail
+
+Keep artifact rows and lists on separate lines.
+This file is used for GitHub browsing and interview walkthroughs, so raw Markdown readability matters.

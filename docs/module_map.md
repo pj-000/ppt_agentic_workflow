@@ -46,3 +46,9 @@ For a quick code tour:
 7. `runtime/backend/harness/repair/models.py`
 8. `runtime/backend/harness/orchestration/models.py`
 9. `runtime/backend/harness/runtime_integration/post_run.py`
+
+## Raw Markdown Guardrail
+
+Keep this module map as real multi-line Markdown.
+Each table row should remain on its own line.
+Do not collapse the directory map or table into a single compressed paragraph.

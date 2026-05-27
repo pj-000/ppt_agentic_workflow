@@ -53,3 +53,8 @@ They also make it clear which parts are production-path behavior and which parts
 
 Do not turn these next steps into claims.
 Only update the README or resume bullets with measured improvements after a real benchmark report exists.
+
+## Raw Markdown Guardrail
+
+Keep current limitations explicit and line-separated.
+This document should stay conservative and should not drift into unverified capability claims.

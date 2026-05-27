@@ -84,3 +84,8 @@ The first replanner is deterministic so patch proposals are auditable, reproduci
 Add an optional post-run hook that is disabled by default, fail-soft,
 and only runs after core artifacts are written. Then gradually wire ToolRuntime or AgentRuntime
 into specific low-risk paths while preserving CLI and FastAPI contracts.
+
+## Raw Markdown Guardrail
+
+Keep each question and answer on separate Markdown lines.
+This makes the playbook usable for quick interview rehearsal and raw GitHub review.

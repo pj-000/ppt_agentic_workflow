@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
+SELF = ROOT / "tests/test_documentation_alignment.py"
 
 DOC_MIN_LINES = {
     "docs/harness_engineering_overview.md": 40,
@@ -126,6 +127,7 @@ def test_readme_bash_blocks_are_multiline_and_install_command_is_valid() -> None
     assert "uv sync" in text
     assert "```bash cd" not in text
     assert "cd  cp .env.example" not in text
+    assert "cd cp .env.example" not in text
 
 
 def test_readme_capability_map_is_real_markdown_table() -> None:
@@ -163,6 +165,15 @@ def test_docs_do_not_have_compressed_heading_lines() -> None:
     for path in _all_markdown_paths():
         for line in _lines(path):
             assert line.count("## ") <= 1, path
+
+
+def test_markdown_code_fences_are_not_inline_blobs() -> None:
+    for path in _all_markdown_paths():
+        for line in _lines(path):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                parts = stripped.split(maxsplit=1)
+                assert len(parts) == 1, path
 
 
 def test_docs_do_not_contain_local_absolute_paths() -> None:
@@ -268,3 +279,12 @@ def test_markdown_files_are_not_one_line_blobs() -> None:
 
         assert len(lines) > 10, path
         assert max_line_len < 400, path
+
+
+def test_documentation_alignment_test_file_is_multiline_python() -> None:
+    lines = _lines(SELF)
+    max_line_len = max((len(line) for line in lines), default=0)
+
+    assert len(lines) >= 100
+    assert lines[0] == "from __future__ import annotations"
+    assert max_line_len < 140

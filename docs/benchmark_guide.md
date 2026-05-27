@@ -60,3 +60,8 @@ Start with:
 7. per-case reasons in `case_results.jsonl`
 
 For interviews, explain the benchmark as an artifact-driven regression harness rather than a claim of production-grade evaluation.
+
+## Raw Markdown Guardrail
+
+Keep benchmark templates and metric lists as real multi-line Markdown.
+Do not replace TBD placeholders with numbers unless they come from a real benchmark report.

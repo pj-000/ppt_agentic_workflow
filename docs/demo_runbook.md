@@ -132,3 +132,8 @@ Example narrative:
 9. Offline Benchmark counts the failure pattern across cases.
 
 This demonstrates controlled Agent Harness Engineering rather than autonomous agent improvisation.
+
+## Raw Markdown Guardrail
+
+Keep demo commands, Python snippets, and numbered walkthroughs on separate lines.
+The runbook should remain readable in both GitHub rendered view and raw Markdown view.
