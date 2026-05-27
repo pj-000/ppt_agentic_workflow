@@ -6,7 +6,9 @@ PPT Generation Agent Harness｜面向文档到 PPT 生成的 Agent 执行框架
 
 ## 一句话
 
-围绕文档到 PPT 生成任务，构建 Agent Harness 工程框架，统一 agent runtime、tool runtime、质量评估、trace、benchmark、memory、repair 和 deterministic replanning，使复杂 LLM 产物生成链路可观测、可评估、可修复、可迭代。
+围绕文档到 PPT 生成任务，构建 Agent Harness 工程框架，统一 agent runtime、tool runtime、
+质量评估、trace、benchmark、memory、repair 和 deterministic replanning，
+使复杂 LLM 产物生成链路可观测、可评估、可修复、可迭代。
 
 ## 简历 Bullet 中文版
 
@@ -22,9 +24,11 @@ PPT Generation Agent Harness｜面向文档到 PPT 生成的 Agent 执行框架
 
 - Built a PPT Generation Agent Harness that models document-to-PPT generation as a controlled Agentic Workflow rather than a fully autonomous multi-agent system.
 - Designed a unified AgentRuntime contract for planner, research, asset, and evaluator workers using structured specs, requests, results, metrics, and errors.
-- Implemented a ToolRuntime / ToolRegistry layer for PptxGenJS, preview rendering, search, document processing, and evaluation tools with retry, timeout, and stable error signatures.
+- Implemented a ToolRuntime / ToolRegistry layer for PptxGenJS, preview rendering, search,
+  document processing, and evaluation tools with retry, timeout, and stable error signatures.
 - Added Quality and Observability harnesses that generate run-level quality reports and structured trace summaries for post-run diagnosis.
-- Built an offline Benchmark Harness to evaluate existing run artifacts using strict success rate, acceptable success rate, tool success rate, missing artifacts, and error signature distributions.
+- Built an offline Benchmark Harness to evaluate existing run artifacts using strict success rate,
+  acceptable success rate, tool success rate, missing artifacts, and error signature distributions.
 - Designed a layered Memory Harness with episodic, semantic, and procedural records while preserving compatibility with legacy repair memory.
 - Implemented Repair and Deterministic Replanner layers that convert quality reports, trace summaries, tool errors, and memory hits into repair plans and auditable patch proposals.
 

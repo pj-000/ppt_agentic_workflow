@@ -26,7 +26,9 @@ Preserve the working PPT generation path. Add harness layers around it before re
 
 ## Data and Safety Guardrails
 
-- Do not write API keys, tokens, passwords, authorization headers, system prompts, hidden reasoning, chain-of-thought, raw model responses, full tracebacks, or environment dumps into trace, memory, reports, benchmark artifacts, or summaries.
+- Do not write API keys, tokens, passwords, authorization headers, system prompts,
+  hidden reasoning, chain-of-thought, raw model responses, full tracebacks,
+  or environment dumps into trace, memory, reports, benchmark artifacts, or summaries.
 - Do not store local absolute paths in public artifacts when a basename or `runs/{run_id}/...` reference is enough.
 - Do not store full prompt bundles in memory.
 - Do not promote memory without evidence from successful outcomes or benchmark gates.

@@ -80,4 +80,5 @@ flowchart TD
 
 ## Preservation Boundary
 
-`ppt_backend/` and the existing `runtime/` flow remain the compatibility baseline. Harness modules should wrap, adapt, or analyze the run rather than rewrite the core generation path.
+`ppt_backend/` and the existing `runtime/` flow remain the compatibility baseline.
+Harness modules should wrap, adapt, or analyze the run rather than rewrite the core generation path.

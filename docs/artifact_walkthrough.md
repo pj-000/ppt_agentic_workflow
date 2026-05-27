@@ -1,6 +1,7 @@
 # Artifact Walkthrough
 
-This document explains the main artifacts produced or consumed by the harness. Most artifacts are safe for demos after checking that they do not contain private input text or proprietary content.
+This document explains the main artifacts produced or consumed by the harness.
+Most artifacts are safe for demos after checking that they do not contain private input text or proprietary content.
 
 | Artifact | Producer | When Generated | Contains | Consumers | Sensitive Data Policy | Demo Friendly |
 |---|---|---|---|---|---|---|

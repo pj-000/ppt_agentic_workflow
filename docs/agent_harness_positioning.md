@@ -8,7 +8,9 @@ PPT Generation Agent Harness
 
 This project is not a fully autonomous multi-agent system. It is a controlled Agentic Workflow executed by a PPT Generation Agent Harness.
 
-本项目不是完全自治式多 Agent 系统，而是一个面向文档到 PPT 生成任务的主控式 Agentic Workflow。Orchestrator 负责主流程，Planner / Research / Asset / Evaluator 是专职 agent-like workers，Harness 负责统一执行边界、工具调用、质量评估、trace、benchmark、memory、repair 和 deterministic replanning。
+本项目不是完全自治式多 Agent 系统，而是一个面向文档到 PPT 生成任务的主控式 Agentic Workflow。
+Orchestrator 负责主流程，Planner / Research / Asset / Evaluator 是专职 agent-like workers。
+Harness 负责统一执行边界、工具调用、质量评估、trace、benchmark、memory、repair 和 deterministic replanning。
 
 ## Why the Distinction Matters
 
@@ -48,4 +50,9 @@ Avoid wording:
 
 ## Compatibility Boundary
 
-The harness should preserve the existing `OrchestratorAgent`, `PlannerAgent`, `ResearchAgent`, `AssetAgent`, `EvaluatorAgent`, `RuntimeMemoryStore`, `RepairOrchestrator`, CLI entrypoints, and FastAPI routes. New behavior should be introduced through adapters, wrappers, optional hooks, and post-run helpers before any deeper replacement is considered.
+The harness should preserve the existing `OrchestratorAgent`, `PlannerAgent`, `ResearchAgent`,
+`AssetAgent`, `EvaluatorAgent`, `RuntimeMemoryStore`, `RepairOrchestrator`, CLI entrypoints,
+and FastAPI routes.
+
+New behavior should be introduced through adapters, wrappers, optional hooks, and post-run helpers
+before any deeper replacement is considered.

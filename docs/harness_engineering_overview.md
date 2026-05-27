@@ -2,7 +2,9 @@
 
 ## What Harness Means Here
 
-In this project, a harness is not a UI and not a thin wrapper around an LLM call. It is the engineering boundary that makes a long document-to-PPT generation workflow controlled, inspectable, and reproducible.
+In this project, a harness is not a UI and not a thin wrapper around an LLM call.
+It is the engineering boundary that makes a long document-to-PPT generation workflow controlled,
+inspectable, and reproducible.
 
 The harness covers:
 
@@ -19,9 +21,13 @@ The harness covers:
 
 ## Why It Is Not a Fully Autonomous MAS
 
-The Orchestrator remains the main controller. Planner, Research, Asset, and Evaluator are specialist worker components. They do not freely negotiate, vote, or autonomously reassign work. The workflow passes structured artifacts between stages, and harness modules inspect or adapt those artifacts.
+The Orchestrator remains the main controller. Planner, Research, Asset, and Evaluator are specialist
+worker components. They do not freely negotiate, vote, or autonomously reassign work.
+The workflow passes structured artifacts between stages, and harness modules inspect or adapt those artifacts.
 
-This is deliberate. PPT generation is a long chain with brittle external tools, file artifacts, preview rendering, evaluation, and repair. A controlled workflow is easier to debug and benchmark than an unconstrained multi-agent conversation.
+This is deliberate. PPT generation is a long chain with brittle external tools, file artifacts,
+preview rendering, evaluation, and repair. A controlled workflow is easier to debug and benchmark
+than an unconstrained multi-agent conversation.
 
 ## Why It Is Agentic Workflow
 
