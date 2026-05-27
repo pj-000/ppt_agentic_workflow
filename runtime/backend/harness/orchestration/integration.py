@@ -35,6 +35,7 @@ def write_replan_artifacts_for_run(
     run_dir: str | Path,
     plan: PlanGraph,
     decision: ReplanDecision,
+    signals: RunSignals | None = None,
 ) -> dict[str, str]:
     del run_id
     output_dir = Path(run_dir)
@@ -42,6 +43,6 @@ def write_replan_artifacts_for_run(
     refs.update(write_plan_graph(plan=plan, output_dir=output_dir))
     refs.update(write_replan_decision(decision=decision, output_dir=output_dir))
     markdown_path = output_dir / "replan_report.md"
-    write_replan_report_markdown(plan=plan, decision=decision, output_path=markdown_path)
+    write_replan_report_markdown(plan=plan, decision=decision, signals=signals, output_path=markdown_path)
     refs["replan_report_md"] = str(markdown_path)
     return sanitize_orchestration_artifacts(refs)
