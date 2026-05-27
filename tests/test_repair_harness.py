@@ -85,6 +85,7 @@ def _issue(
     issue_type: str = "visual_score_below_threshold",
     *,
     scope: RepairScope = RepairScope.VISUAL,
+    severity: RepairSeverity = RepairSeverity.WARNING,
     error_signature: str | None = "visual.low_score",
     tool_name: str | None = None,
     message: str = "Visual score is low",
@@ -94,7 +95,7 @@ def _issue(
         run_id="run_1",
         source=RepairSource.QUALITY,
         scope=scope,
-        severity=RepairSeverity.WARNING,
+        severity=severity,
         trigger_stage="visual_qa",
         issue_type=issue_type,
         slide_index=1 if scope == RepairScope.VISUAL else None,
@@ -254,6 +255,44 @@ def test_repair_planner_maps_issue_types_to_actions_and_policy_limits() -> None:
     assert len(RepairPlanner(policy=RepairPolicy(max_total_actions=2)).plan(run_id="run_1", issues=issues).actions) == 2
 
 
+def test_repair_planner_high_risk_and_dependency_actions_are_not_auto_executable() -> None:
+    issues = [
+        _issue("content_issue_count_exceeded", scope=RepairScope.CONTENT, error_signature="content.issue_count_exceeded"),
+        _issue(
+            "preview_dependency",
+            scope=RepairScope.TOOL,
+            error_signature="ppt.render_preview:DependencyMissing:soffice_not_found",
+            message="LibreOffice dependency missing",
+        ),
+    ]
+
+    plan = RepairPlanner(policy=RepairPolicy(low_risk_only=True)).plan(run_id="run_1", issues=issues)
+    content_action = next(action for action in plan.actions if action.action_type == RepairActionType.CONTENT_REWRITE)
+    dependency_action = next(action for action in plan.actions if action.action_type == RepairActionType.MANUAL_REVIEW)
+
+    assert content_action.metadata["auto_execute"] is False
+    assert content_action.metadata["skip_reason"] == "high_risk_action"
+    assert dependency_action.metadata["auto_execute"] is False
+    assert dependency_action.metadata["skip_reason"] == "environment_dependency_missing"
+
+
+def test_repair_planner_missing_metric_issue_generates_no_op_or_no_action() -> None:
+    issue = _issue(
+        "missing_metric",
+        scope=RepairScope.UNKNOWN,
+        severity=RepairSeverity.INFO,
+        error_signature="quality.missing_metric:tool_errors",
+        message="Quality metric missing",
+    )
+
+    plan = RepairPlanner().plan(run_id="run_1", issues=[issue])
+
+    assert len(plan.actions) == 1
+    assert plan.actions[0].action_type == RepairActionType.NO_OP
+    assert plan.actions[0].metadata["auto_execute"] is False
+    assert plan.actions[0].metadata["skip_reason"] == "informational_missing_metric"
+
+
 def test_repair_planner_integrates_memory_legacy_and_trace(tmp_path: Path) -> None:
     class FakeTrace:
         def __init__(self) -> None:
@@ -345,6 +384,133 @@ def test_repair_executor_skips_successes_failures_and_summarizes() -> None:
     assert all("sk-secret123456789" not in attempt.model_dump_json() for attempt in partial.attempts)
 
 
+def test_repair_executor_skips_auto_execute_false_action() -> None:
+    action = _action(RepairActionType.CONTENT_REWRITE, issue_id="issue_policy").model_copy(
+        update={"metadata": {"auto_execute": False}}
+    )
+
+    def should_not_run(action: RepairAction) -> RepairAttempt:
+        raise AssertionError("handler should not be called")
+
+    result = RepairExecutor(handlers={RepairActionType.CONTENT_REWRITE: should_not_run}).execute_plan(_plan([action]))
+
+    assert result.status == "skipped"
+    assert result.attempts[0].status == "skipped"
+    assert result.attempts[0].metrics["skip_reason"] == "auto_execute_false"
+
+
+def test_repair_result_resolved_and_unresolved_do_not_overlap() -> None:
+    issue = _issue("mixed_issue", scope=RepairScope.VISUAL)
+    success_action = _action(RepairActionType.ADJUST_LAYOUT, issue_id=issue.issue_id)
+    failed_action = _action(RepairActionType.CONTENT_REWRITE, issue_id=issue.issue_id)
+    plan = RepairPlan(
+        plan_id="plan_overlap",
+        run_id="run_1",
+        status="planned",
+        issues=[issue],
+        actions=[success_action, failed_action],
+        created_at=utc_now_iso(),
+    )
+
+    def success_handler(action: RepairAction) -> RepairAttempt:
+        return RepairAttempt(
+            attempt_id="attempt_success",
+            plan_id=plan.plan_id,
+            action_id=action.action_id,
+            issue_id=action.issue_id,
+            run_id=plan.run_id,
+            status="success",
+        )
+
+    def failing_handler(action: RepairAction) -> RepairAttempt:
+        raise RuntimeError("failed")
+
+    result = RepairExecutor(
+        handlers={
+            RepairActionType.ADJUST_LAYOUT: success_handler,
+            RepairActionType.CONTENT_REWRITE: failing_handler,
+        }
+    ).execute_plan(plan)
+
+    assert issue.issue_id in result.resolved_issue_ids
+    assert issue.issue_id not in result.unresolved_issue_ids
+    assert set(result.resolved_issue_ids).isdisjoint(result.unresolved_issue_ids)
+
+
+def test_repair_result_marks_issue_without_attempt_as_unresolved() -> None:
+    issue = _issue("issue_without_attempt", scope=RepairScope.VISUAL)
+    plan = RepairPlan(
+        plan_id="plan_no_attempt",
+        run_id="run_1",
+        status="empty",
+        issues=[issue],
+        actions=[],
+        created_at=utc_now_iso(),
+    )
+
+    result = RepairExecutor().execute_plan(plan)
+
+    assert result.status == "not_executed"
+    assert issue.issue_id in result.unresolved_issue_ids
+
+
+def test_repair_result_metadata_contains_attempt_summary() -> None:
+    success_action = _action(RepairActionType.ADJUST_LAYOUT, issue_id="issue_success")
+    skipped_action = _action(RepairActionType.MANUAL_REVIEW, issue_id="issue_skipped")
+    failed_action = _action(RepairActionType.CONTENT_REWRITE, issue_id="issue_failed")
+
+    def success_handler(action: RepairAction) -> RepairAttempt:
+        return RepairAttempt(
+            attempt_id="attempt_success",
+            plan_id="plan_1",
+            action_id=action.action_id,
+            issue_id=action.issue_id,
+            run_id="run_1",
+            status="success",
+        )
+
+    def failing_handler(action: RepairAction) -> RepairAttempt:
+        raise RuntimeError("failed")
+
+    result = RepairExecutor(
+        handlers={RepairActionType.ADJUST_LAYOUT: success_handler, RepairActionType.CONTENT_REWRITE: failing_handler}
+    ).execute_plan(_plan([success_action, skipped_action, failed_action]))
+
+    assert result.metadata["attempt_count"] == 3
+    assert result.metadata["success_count"] == 1
+    assert result.metadata["failed_count"] == 1
+    assert result.metadata["skipped_count"] == 1
+    assert result.metadata["not_executed_count"] == 0
+    assert result.metadata["repair_success_rate"] == 1 / 3
+
+
+def test_repair_executor_trace_contains_attempt_summary() -> None:
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, dict[str, Any]]] = []
+
+        def record(self, stage: str, payload: dict[str, Any]) -> None:
+            self.records.append((stage, payload))
+
+    trace = FakeTrace()
+    action = _action(RepairActionType.MANUAL_REVIEW, issue_id="issue_skipped")
+    RepairExecutor(trace=trace).execute_plan(_plan([action]))
+    finished = [payload for stage, payload in trace.records if stage == "repair.finished"][-1]
+
+    assert finished["attempt_count"] == 1
+    assert finished["success_count"] == 0
+    assert finished["failed_count"] == 0
+    assert finished["skipped_count"] == 1
+    assert finished["repair_success_rate"] == 0
+
+
+def test_repair_executor_accepts_policy() -> None:
+    policy = RepairPolicy(max_attempts_per_action=3)
+    executor = RepairExecutor(policy=policy)
+
+    assert executor.policy.max_attempts_per_action == 3
+
+
 def test_repair_executor_records_trace_and_trace_failure_is_best_effort() -> None:
     trace_store = TraceStore(Path("/tmp") / "repair_trace_test")
     trace = ObservabilityTraceAdapter(run_id="run_1", trace_store=trace_store)
@@ -413,6 +579,22 @@ def test_repair_report_writers_create_json_and_markdown_without_sensitive_text(t
     assert "sk-secret123456789" not in markdown
 
 
+def test_repair_report_markdown_contains_attempt_summary(tmp_path: Path) -> None:
+    action = _action(RepairActionType.MANUAL_REVIEW, issue_id="issue_skipped")
+    plan = _plan([action])
+    result = RepairExecutor().execute_plan(plan)
+
+    write_repair_report_markdown(plan=plan, result=result, output_path=tmp_path / "repair_report.md")
+    markdown = (tmp_path / "repair_report.md").read_text(encoding="utf-8")
+
+    assert "Attempt Count" in markdown
+    assert "Success Count" in markdown
+    assert "Skipped Count" in markdown
+    assert "Repair Success Rate" in markdown
+    assert "skip_reason" in markdown
+    assert "no_handler" in markdown
+
+
 def test_integration_builds_plan_from_artifacts_and_writes_outputs(tmp_path: Path) -> None:
     run_dir = tmp_path / "runs" / "run_1"
     run_dir.mkdir(parents=True)
@@ -425,6 +607,37 @@ def test_integration_builds_plan_from_artifacts_and_writes_outputs(tmp_path: Pat
     assert plan.actions
     assert Path(artifacts["repair_plan_json"]).name == "repair_plan.json"
     assert Path(artifacts["repair_report_md"]).name == "repair_report.md"
+    assert (run_dir / "repair_plan.json").exists()
+
+
+def test_build_repair_plan_sanitizes_run_dir_in_metadata(tmp_path: Path) -> None:
+    run_dir = tmp_path / "project" / "outputs" / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    quality = _quality_report()
+    (run_dir / "quality_report.json").write_text(json.dumps(quality, ensure_ascii=False), encoding="utf-8")
+
+    plan = build_repair_plan_from_run_artifacts(run_id="run_1", run_dir=run_dir)
+    serialized = plan.model_dump_json()
+
+    assert str(tmp_path) not in serialized
+    assert "/private" not in serialized
+    assert "run_1" in serialized
+
+
+def test_write_repair_artifacts_returns_sanitized_artifact_refs(tmp_path: Path) -> None:
+    run_dir = tmp_path / "outputs" / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    plan = _plan([_action()])
+    result = RepairExecutor().execute_plan(plan)
+
+    refs = write_repair_artifacts_for_run(run_id="run_1", run_dir=run_dir, plan=plan, result=result)
+    serialized = json.dumps(refs, ensure_ascii=False)
+
+    assert str(tmp_path) not in serialized
+    assert "/private/tmp" not in serialized
+    assert "repair_plan.json" in serialized
+    assert "repair_result.json" in serialized
+    assert "repair_report.md" in serialized
     assert (run_dir / "repair_plan.json").exists()
 
 

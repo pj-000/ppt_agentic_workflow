@@ -15,3 +15,7 @@ def sanitize_repair_mapping(value: Any) -> dict[str, Any]:
 
 def sanitize_repair_artifacts(value: Any) -> dict[str, str]:
     return sanitize_memory_artifacts(value)
+
+
+def sanitize_repair_path(value: Any) -> str:
+    return sanitize_repair_artifacts({"path": str(value)}).get("path", "")

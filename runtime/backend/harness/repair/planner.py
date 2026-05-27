@@ -12,6 +12,7 @@ from backend.harness.repair.models import (
     RepairIssue,
     RepairPlan,
     RepairScope,
+    RepairSeverity,
     stable_repair_id,
     utc_now_iso,
 )
@@ -95,6 +96,7 @@ class RepairPlanner:
     ) -> list[RepairAction]:
         del context
         action_type, scope, target_tool, risk_level, instruction, expected = _default_action(issue, self.policy)
+        skip_reason = ""
         if not _allowed_by_policy(action_type, self.policy):
             action_type = RepairActionType.MANUAL_REVIEW if self.policy.allow_manual_review else RepairActionType.NO_OP
             scope = issue.scope
@@ -102,6 +104,7 @@ class RepairPlanner:
             risk_level = "low"
             instruction = "Review this issue manually; configured policy disabled the automatic action."
             expected = "Human review decides the next safe repair step."
+            skip_reason = "policy_disabled_action"
 
         legacy_instruction = self._legacy_instruction(issue)
         if legacy_instruction:
@@ -116,6 +119,13 @@ class RepairPlanner:
         auto_execute = True
         if self.policy.low_risk_only and action_type.value in set(self.policy.high_risk_action_types):
             auto_execute = False
+            skip_reason = skip_reason or "high_risk_action"
+        if _is_dependency_missing(issue):
+            auto_execute = False
+            skip_reason = "environment_dependency_missing"
+        if issue.issue_type == "missing_metric" and issue.severity == RepairSeverity.INFO:
+            auto_execute = False
+            skip_reason = "informational_missing_metric"
         action_id = stable_repair_id("action", issue.issue_id, action_type.value, issue.slide_index, issue.tool_name)
         return [
             RepairAction(
@@ -133,6 +143,7 @@ class RepairPlanner:
                     "auto_execute": auto_execute,
                     "memory_ref_summary": refs,
                     "source_issue_type": issue.issue_type,
+                    "skip_reason": skip_reason,
                 },
             )
         ]
@@ -230,6 +241,15 @@ def _default_action(
     policy: RepairPolicy,
 ) -> tuple[RepairActionType, RepairScope, str | None, str, str, str]:
     text = " ".join(str(value or "") for value in (issue.issue_type, issue.error_signature, issue.message)).lower()
+    if issue.issue_type == "missing_metric" and issue.severity == RepairSeverity.INFO:
+        return (
+            RepairActionType.NO_OP,
+            issue.scope,
+            issue.tool_name,
+            "low",
+            "Missing metric is informational; no automatic repair action is required.",
+            "Keep missing metric visible without triggering misleading repair.",
+        )
     if "dependencymissing" in text or "dependency missing" in text:
         return (
             RepairActionType.MANUAL_REVIEW,
@@ -315,3 +335,16 @@ def _memory_namespace(issue: RepairIssue) -> str:
     if issue.scope == RepairScope.VISUAL:
         return REPAIR_VISUAL
     return REPAIR_TOOL
+
+
+def _is_dependency_missing(issue: RepairIssue) -> bool:
+    text = " ".join(str(value or "") for value in (issue.error_signature, issue.message, issue.issue_type)).lower()
+    return any(
+        marker in text
+        for marker in (
+            "dependencymissing",
+            "dependency missing",
+            "soffice_not_found",
+            "pdftoppm_not_found",
+        )
+    )

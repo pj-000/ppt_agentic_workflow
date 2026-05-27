@@ -13,6 +13,7 @@ from backend.harness.repair.models import (
     stable_repair_id,
     utc_now_iso,
 )
+from backend.harness.repair.policies import RepairPolicy
 from backend.harness.repair.safety import sanitize_repair_mapping, sanitize_repair_text
 
 logger = logging.getLogger(__name__)
@@ -21,9 +22,15 @@ RepairActionHandler = Callable[[RepairAction], RepairAttempt]
 
 
 class RepairExecutor:
-    def __init__(self, handlers: dict[RepairActionType, RepairActionHandler] | None = None, trace: Any | None = None):
+    def __init__(
+        self,
+        handlers: dict[RepairActionType, RepairActionHandler] | None = None,
+        trace: Any | None = None,
+        policy: RepairPolicy | None = None,
+    ):
         self.handlers = handlers or {}
         self.trace = trace
+        self.policy = policy or RepairPolicy()
 
     def execute_plan(self, plan: RepairPlan) -> RepairResult:
         self._record(
@@ -38,8 +45,12 @@ class RepairExecutor:
         )
         attempts = [self._execute_action(plan, action) for action in plan.actions]
         status = _result_status(attempts)
-        resolved = sorted({attempt.issue_id for attempt in attempts if attempt.status == "success"})
-        unresolved = sorted({attempt.issue_id for attempt in attempts if attempt.status != "success"})
+        summary = _attempt_summary(attempts)
+        all_issue_ids = {issue.issue_id for issue in plan.issues}
+        attempt_issue_ids = {attempt.issue_id for attempt in attempts}
+        success_issue_ids = {attempt.issue_id for attempt in attempts if attempt.status == "success"}
+        resolved = sorted(success_issue_ids)
+        unresolved = sorted((all_issue_ids | attempt_issue_ids) - success_issue_ids)
         result = RepairResult(
             run_id=plan.run_id,
             plan_id=plan.plan_id,
@@ -47,7 +58,7 @@ class RepairExecutor:
             attempts=attempts,
             resolved_issue_ids=resolved,
             unresolved_issue_ids=unresolved,
-            metadata={"issue_count": len(plan.issues), "action_count": len(plan.actions)},
+            metadata={"issue_count": len(plan.issues), "action_count": len(plan.actions), **summary},
         )
         self._record(
             "repair.finished",
@@ -59,12 +70,26 @@ class RepairExecutor:
                 "status": result.status,
                 "resolved_issue_count": len(resolved),
                 "unresolved_issue_count": len(unresolved),
+                **summary,
             },
         )
         return result
 
     def _execute_action(self, plan: RepairPlan, action: RepairAction) -> RepairAttempt:
         started = utc_now_iso()
+        if action.metadata.get("auto_execute") is False:
+            return RepairAttempt(
+                attempt_id=stable_repair_id("attempt", plan.plan_id, action.action_id, "auto_execute_false"),
+                plan_id=plan.plan_id,
+                action_id=action.action_id,
+                issue_id=action.issue_id,
+                run_id=plan.run_id,
+                status="skipped",
+                started_at=started,
+                finished_at=utc_now_iso(),
+                message="Action marked as non-auto-executable by repair policy",
+                metrics={"skip_reason": "auto_execute_false"},
+            )
         handler = self.handlers.get(action.action_type)
         if handler is None:
             return RepairAttempt(
@@ -77,6 +102,7 @@ class RepairExecutor:
                 started_at=started,
                 finished_at=utc_now_iso(),
                 message="No handler registered for action type",
+                metrics={"skip_reason": "no_handler"},
             )
         try:
             attempt = handler(action)
@@ -128,3 +154,19 @@ def _result_status(attempts: list[RepairAttempt]) -> str:
     if statuses == {"failed"}:
         return "failed"
     return "partial"
+
+
+def _attempt_summary(attempts: list[RepairAttempt]) -> dict[str, Any]:
+    attempt_count = len(attempts)
+    success_count = sum(1 for attempt in attempts if attempt.status == "success")
+    failed_count = sum(1 for attempt in attempts if attempt.status == "failed")
+    skipped_count = sum(1 for attempt in attempts if attempt.status == "skipped")
+    not_executed_count = sum(1 for attempt in attempts if attempt.status == "not_executed")
+    return {
+        "attempt_count": attempt_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "skipped_count": skipped_count,
+        "not_executed_count": not_executed_count,
+        "repair_success_rate": success_count / attempt_count if attempt_count else None,
+    }

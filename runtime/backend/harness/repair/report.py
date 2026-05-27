@@ -46,6 +46,11 @@ def write_repair_report_markdown(
         f"- Status: `{sanitize_repair_text((result.status if result else plan.status), limit=80)}`",
         f"- Issue Count: {len(plan.issues)}",
         f"- Action Count: {len(plan.actions)}",
+        f"- Attempt Count: {_metadata_value(result, 'attempt_count')}",
+        f"- Success Count: {_metadata_value(result, 'success_count')}",
+        f"- Failed Count: {_metadata_value(result, 'failed_count')}",
+        f"- Skipped Count: {_metadata_value(result, 'skipped_count')}",
+        f"- Repair Success Rate: {_metadata_value(result, 'repair_success_rate')}",
         "",
         "## Issues",
         "",
@@ -99,7 +104,7 @@ def write_repair_report_markdown(
 
     lines.extend(["", "## Attempts", ""])
     if result and result.attempts:
-        lines.extend(["| attempt_id | action_id | status | message |", "| --- | --- | --- | --- |"])
+        lines.extend(["| attempt_id | action_id | status | skip_reason | message |", "| --- | --- | --- | --- | --- |"])
         for attempt in result.attempts:
             lines.append(
                 "| "
@@ -108,6 +113,7 @@ def write_repair_report_markdown(
                         _cell(attempt.attempt_id),
                         _cell(attempt.action_id),
                         _cell(attempt.status),
+                        _cell(attempt.metrics.get("skip_reason", "")),
                         _cell(attempt.message),
                     ]
                 )
@@ -129,6 +135,13 @@ def write_repair_report_markdown(
 
 def _cell(value: Any) -> str:
     return sanitize_repair_text(value, limit=180).replace("|", "\\|").replace("\n", " ")
+
+
+def _metadata_value(result: RepairResult | None, key: str) -> str:
+    if result is None:
+        return "n/a"
+    value = result.metadata.get(key)
+    return sanitize_repair_text("n/a" if value is None else value, limit=120)
 
 
 def _notes(plan: RepairPlan, result: RepairResult | None) -> str:

@@ -12,7 +12,7 @@ from backend.harness.repair.models import RepairPlan, RepairResult, stable_repai
 from backend.harness.repair.planner import RepairPlanner
 from backend.harness.repair.policies import RepairPolicy
 from backend.harness.repair.report import write_repair_plan, write_repair_report_markdown, write_repair_result
-from backend.harness.repair.safety import sanitize_repair_mapping
+from backend.harness.repair.safety import sanitize_repair_artifacts, sanitize_repair_mapping, sanitize_repair_path
 
 
 def build_repair_plan_from_run_artifacts(
@@ -45,7 +45,11 @@ def build_repair_plan_from_run_artifacts(
             metadata=sanitize_repair_mapping({"missing_artifacts": missing}),
         )
     planner = RepairPlanner(policy=active_policy, memory=memory, legacy_repair=legacy_repair, trace=trace)
-    return planner.plan(run_id=run_id, issues=issues, context={"run_dir": str(run_path), "missing_artifacts": missing})
+    return planner.plan(
+        run_id=run_id,
+        issues=issues,
+        context={"run_dir": sanitize_repair_path(run_path), "missing_artifacts": missing},
+    )
 
 
 def write_repair_artifacts_for_run(
@@ -64,7 +68,7 @@ def write_repair_artifacts_for_run(
     markdown_path = output_dir / "repair_report.md"
     write_repair_report_markdown(plan=plan, result=result, output_path=markdown_path)
     artifact_refs["repair_report_md"] = str(markdown_path)
-    return artifact_refs
+    return sanitize_repair_artifacts(artifact_refs)
 
 
 def _load_json_object(path: Path) -> tuple[dict[str, Any] | None, str | None]:
